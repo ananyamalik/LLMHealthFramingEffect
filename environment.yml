@@ -17,6 +17,7 @@ dependencies:
   - main::gcsfs
   - conda-forge::rapidfuzz
   - conda-forge::plotly
+  - conda-forge::statmodels
   - pip:
     - torch
     - torchvision
@@ -28,3 +29,4 @@ dependencies:
     - spacy
     - tiktoken
     - diff-match-patch
+    - krippendorff
