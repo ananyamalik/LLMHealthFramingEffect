@@ -42,17 +42,34 @@ def set_global_seed(seed_value: int = SEED) -> None:
 
 # Model loading
 REPO_DIR = os.path.dirname(CODE_DIR)
-ENV_FILE_PATHS = [os.path.join(REPO_DIR, ".env"), os.path.join(os.path.dirname(REPO_DIR), ".env"), os.path.expanduser("~/.env")]
+ENV_FILE_PATHS = list(dict.fromkeys(  # dedupe: on Explorer the repo's parent is the home directory
+    [os.path.join(REPO_DIR, ".env"), os.path.join(os.path.dirname(REPO_DIR), ".env"), os.path.expanduser("~/.env")]
+))
 
 
 def get_hf_token() -> str | None:
-    """HF token from the repo .env, the .env one level above the repo, or ~/.env (as HUGGINGFACE_TOKEN or HF_TOKEN)."""
+    """
+    HF token from the repo .env, the .env one level above the repo, or ~/.env. HF_TOKEN is preferred over
+    HUGGINGFACE_TOKEN. The first valid token (checked with whoami) is used.
+    """
+    from huggingface_hub import whoami
+
     for path in ENV_FILE_PATHS:
         if os.path.isfile(path):
             load_dotenv(path, override=False)
-    token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
-    print(f"HF token found: {token is not None} (checked {', '.join(p for p in ENV_FILE_PATHS if os.path.isfile(p)) or 'no .env files'})")
-    return token
+    print(f".env files loaded: {', '.join(p for p in ENV_FILE_PATHS if os.path.isfile(p)) or 'none'}")
+
+    for var in ["HF_TOKEN", "HUGGINGFACE_TOKEN"]:
+        token = os.getenv(var)
+        if not token:
+            continue
+        try:
+            print(f"Using {var} (HF user: {whoami(token=token)['name']})")
+            return token
+        except Exception as e:
+            print(f"{var} is set but invalid ({type(e).__name__}); trying the next one")
+    print("No valid HF token found")
+    return None
 
 
 def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
