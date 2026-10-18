@@ -1,24 +1,20 @@
 #!/bin/bash
 # Shared environment + settings for the two activation patching jobs (sourced by both job scripts).
 
-module purge
+cd "$SLURM_SUBMIT_DIR"
 
-# Batch jobs don't read ~/.bashrc, so load conda's shell functions before `conda activate`.
-# Use the personal conda install in the home directory if there is one, otherwise the cluster's anaconda module.
-CONDA_ROOT=""
-for candidate in "$HOME/conda" "$HOME/.conda" "$HOME/miniconda3" "$HOME/anaconda3"; do
-    if [ -f "$candidate/etc/profile.d/conda.sh" ]; then
-        CONDA_ROOT="$candidate"
-        break
-    fi
-done
-if [ -z "$CONDA_ROOT" ]; then
-    module load explorer anaconda3/2024.06
-    CONDA_ROOT="$(conda info --base)"
-fi
-echo "Using conda at $CONDA_ROOT"
-source "$CONDA_ROOT/etc/profile.d/conda.sh"
-conda activate personaLLM
+# Same conda setup as the working rejudge/attention jobs: load the module, then conda's shell hook, then activate.
+# Override the env with: CONDA_ENV=myenv sbatch run_layer_sweep.sh
+CONDA_ENV="${CONDA_ENV:-ifeval}"
+module load anaconda3/2024.06
+eval "$(conda shell.bash hook)"
+conda activate "$CONDA_ENV"
+
+# Stop if the env didn't actually activate (otherwise python silently falls back to the cluster's base anaconda)
+case "$(python -c 'import sys; print(sys.prefix)')" in
+    */envs/"$CONDA_ENV") echo "python: $(which python) ($(python --version))" ;;
+    *) echo "ERROR: conda env '$CONDA_ENV' is not active (python is $(which python)). Check 'conda env list'." >&2; exit 1 ;;
+esac
 
 # Ignore packages in ~/.local so they can't shadow the conda env's (this caused the NumPy 1.x/2.x crash)
 export PYTHONNOUSERSITE=1
@@ -28,7 +24,7 @@ export HUGGINGFACE_HUB_CACHE="/scratch/$USER/.cache"
 export XDG_CACHE_HOME="/scratch/$USER/.cache"
 
 # Fail fast if the env is missing anything
-python3 -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('python', __import__('sys').executable, '| torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
+python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('python', __import__('sys').executable, '| torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
 
 MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
 MODEL_TAG="llama3-8B-instruct"

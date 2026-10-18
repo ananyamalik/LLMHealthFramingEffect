@@ -16,7 +16,7 @@
 # Resumes from patched_generations.jsonl, so resubmitting after a timeout continues where it left off.
 
 source ./patching_config.sh
-set -e
+set -eo pipefail
 
 if [ ! -f "$OUTPUT_DIR/sweep/layer_sweep_summary.json" ]; then
     echo "Missing $OUTPUT_DIR/sweep/layer_sweep_summary.json -- run run_layer_sweep.sh to completion first." >&2
