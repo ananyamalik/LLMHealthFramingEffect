@@ -7,7 +7,7 @@
 #SBATCH --mem=64G
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH -o output_%j.txt                     # Standard output file
+#SBATCH -o logs/output_%j.txt                     # Standard output file
 #SBATCH -e error_%j.txt                      # Standard error file
 
 # Submit from the mechanistic-search folder:  cd mechanistic-search && sbatch run_activation_patching.sh
@@ -16,9 +16,9 @@
 module purge
 module load explorer anaconda3/2024.06
 
-source activate base
-source activate llm_health_framing_effect
-conda activate llm_health_framing_effect
+# source activate base
+# source activate llm_health_framing_effect
+conda activate personaLLM
 
 export HF_HOME="/scratch/$USER/.cache"
 export HUGGINGFACE_HUB_CACHE="/scratch/$USER/.cache"
