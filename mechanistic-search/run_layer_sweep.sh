@@ -17,6 +17,21 @@
 source ./patching_config.sh
 set -e
 
+CONDA_ROOT=""
+for candidate in "$HOME/conda" "$HOME/.conda" "$HOME/miniconda3" "$HOME/anaconda3"; do
+    if [ -f "$candidate/etc/profile.d/conda.sh" ]; then
+        CONDA_ROOT="$candidate"
+        break
+    fi
+done
+if [ -z "$CONDA_ROOT" ]; then
+    module load explorer anaconda3/2024.06
+    CONDA_ROOT="$(conda info --base)"
+fi
+echo "Using conda at $CONDA_ROOT"
+source "$CONDA_ROOT/etc/profile.d/conda.sh"
+conda activate personaLLM
+
 echo "Stage 1: layer sweep"
 python3 -u run_layer_sweep.py \
     --model "$MODEL" \

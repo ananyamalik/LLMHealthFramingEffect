@@ -2,10 +2,22 @@
 # Shared environment + settings for the two activation patching jobs (sourced by both job scripts).
 
 module purge
-module load explorer anaconda3/2024.06
 
-# `conda activate` only works in batch jobs after loading conda's shell functions
-source "$(conda info --base)/etc/profile.d/conda.sh"
+# Batch jobs don't read ~/.bashrc, so load conda's shell functions before `conda activate`.
+# Use the personal conda install in the home directory if there is one, otherwise the cluster's anaconda module.
+CONDA_ROOT=""
+for candidate in "$HOME/conda" "$HOME/.conda" "$HOME/miniconda3" "$HOME/anaconda3"; do
+    if [ -f "$candidate/etc/profile.d/conda.sh" ]; then
+        CONDA_ROOT="$candidate"
+        break
+    fi
+done
+if [ -z "$CONDA_ROOT" ]; then
+    module load explorer anaconda3/2024.06
+    CONDA_ROOT="$(conda info --base)"
+fi
+echo "Using conda at $CONDA_ROOT"
+source "$CONDA_ROOT/etc/profile.d/conda.sh"
 conda activate personaLLM
 
 # Ignore packages in ~/.local so they can't shadow the conda env's (this caused the NumPy 1.x/2.x crash)
