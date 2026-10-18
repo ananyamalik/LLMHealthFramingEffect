@@ -5,7 +5,7 @@ cd "$SLURM_SUBMIT_DIR"
 
 # Same conda setup as the working rejudge/attention jobs: load the module, then conda's shell hook, then activate.
 # Override the env with: CONDA_ENV=myenv sbatch run_layer_sweep.sh
-CONDA_ENV="${CONDA_ENV:-ifeval}"
+CONDA_ENV="${CONDA_ENV:-emotional-safety}"
 module load anaconda3/2024.06
 eval "$(conda shell.bash hook)"
 conda activate "$CONDA_ENV"
