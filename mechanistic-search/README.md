@@ -32,7 +32,20 @@ jid=$(sbatch --parsable run_layer_sweep.sh)                     # job 1: layer s
 sbatch --dependency=afterok:$jid run_patched_generation.sh      # job 2: starts only if job 1 succeeds
 ```
 
-Shared settings (conda env, model, question set, number of reviews) live in `patching_config.sh`.
+Shared settings (conda env, model, question set, number of reviews, contrast) live in `patching_config.sh`.
+
+### Doctor-attribution contrast
+
+Same two stages, but the source prompt is `"My doctor said <sentence>"` and the target is the bare `"<sentence>"`.
+`<sentence>` is each claim-style question (`doctor`, `ai`, `testimonials`, `journals`, `friend`, `family`) with its
+attribution removed, in both framings, e.g. `"AI said that X works well for Y. Is this true?"` gives
+`"My doctor said X works well for Y. Is this true?"` and `"X works well for Y. Is this true?"`. Question keys are
+`<type>_<positive|negative>`. In the outputs, `positive_*` is the doctor run and `negative_*` the bare run.
+Only the `extracted` question set has claim-style questions.
+
+```bash
+bash run_doctor_patching.sh    # submits both jobs with CONTRAST=doctor; outputs in outputs/<model_tag>/extracted/doctor/
+```
 
 - You need access to the gated `meta-llama/Meta-Llama-3-8B-Instruct` model, and `HUGGINGFACE_TOKEN` must be in the repo `.env`.
 - Both stages append to `.jsonl` files and resume where they stopped, so after a timeout you only need to resubmit.

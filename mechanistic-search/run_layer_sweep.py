@@ -12,6 +12,9 @@ Metric (teacher forced, no sampling):
 
 We also log KL(p_pos || p) for the first-token distribution, for the clean negative run and each patched run.
 
+--contrast doctor runs the same sweep with "My doctor said <sentence>" as the source (positive_*) and the bare
+"<sentence>" as the target (negative_*); see CONTRASTS in patching_utils.py.
+
 Outputs (in --output_dir):
     layer_sweep_pairs.jsonl   one line per pair (clean responses + per-layer metrics); used to resume and by stage 2
     layer_sweep_summary.json  per-layer aggregates (overall and per question type)
@@ -28,7 +31,7 @@ from tqdm import tqdm
 
 from patching_utils import (
     DEFAULT_MODEL_NAME, SEED, set_global_seed, load_model_and_tokenizer, get_decoder_layers, get_context_length,
-    format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_question_types,
+    format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_prompt_pairs, CONTRASTS,
     get_positive_cache, patch_residual, last_positions, greedy_generate, response_logprobs, kl_divergence,
 )
 
@@ -132,6 +135,7 @@ def summarize(pairs_path: str, summary_path: str) -> dict:
 
     layers_sorted = sorted(per_layer, key=int)
     summary = {
+        "contrast": records[0].get("contrast", "framing") if records else None,
         "num_pairs": len(records),
         "num_pairs_with_effect": num_valid,
         "num_pairs_identical_responses": sum(r["identical_responses"] for r in records),
@@ -175,13 +179,14 @@ def main(args):
             review_id = example["ReviewID"]
             rct_inputs = format_rct_inputs(example["Inputs"])
 
-            for q_key in get_question_types(example, args.question_types):
+            for prompt_pair in get_prompt_pairs(example, args.contrast, args.question_types):
+                q_key = prompt_pair["question_key"]
                 key = pair_key(review_id, q_key)
                 if key in done:
                     continue
-                q_dict = example["Questions"][q_key]
-                pos_ids = build_prompt_ids(tokenizer, q_dict["positive_question"], rct_inputs, model.device)
-                neg_ids = build_prompt_ids(tokenizer, q_dict["negative_question"], rct_inputs, model.device)
+                pos_question, neg_question = prompt_pair["source_question"], prompt_pair["target_question"]
+                pos_ids = build_prompt_ids(tokenizer, pos_question, rct_inputs, model.device)
+                neg_ids = build_prompt_ids(tokenizer, neg_question, rct_inputs, model.device)
 
                 longest = max(pos_ids.shape[1], neg_ids.shape[1]) + args.max_new_tokens
                 if longest > context_length:
@@ -197,8 +202,9 @@ def main(args):
                     "pair_key": key,
                     "review_id": review_id,
                     "question_key": q_key,
-                    "positive_question": q_dict["positive_question"],
-                    "negative_question": q_dict["negative_question"],
+                    "contrast": args.contrast,
+                    "positive_question": pos_question,
+                    "negative_question": neg_question,
                     "positive_answer": tokenizer.decode(pos_resp, skip_special_tokens=True).strip(),
                     "negative_answer": tokenizer.decode(neg_resp, skip_special_tokens=True).strip(),
                     "pos_prompt_len": pos_ids.shape[1],
@@ -225,12 +231,13 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Layer sweep of last-token activation patching (positive -> negative framing)")
+    parser = argparse.ArgumentParser(description="Layer sweep of last-token activation patching (source -> target prompt)")
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="HuggingFace model name.")
     parser.add_argument("--input_path", required=True, help="dataset with RCT inputs and framed questions (cochrane_review_data_final_with_questions.json).")
     parser.add_argument("--output_dir", required=True, help="directory to save the sweep outputs.")
     parser.add_argument("--num_reviews", default=30, type=int, help="number of reviews to sample (each gives one pair per question type). Use -1 for all.")
-    parser.add_argument("--question_types", nargs="*", default=None, help="subset of question types (default: all single-turn types).")
+    parser.add_argument("--contrast", default="framing", choices=CONTRASTS, help="framing: positive -> negative framing. doctor: 'My doctor said <sentence>' -> '<sentence>'.")
+    parser.add_argument("--question_types", nargs="*", default=None, help="subset of question types (default: all single-turn types; for --contrast doctor, all claim-style types).")
     parser.add_argument("--max_new_tokens", default=512, type=int, help="max tokens for the clean greedy responses.")
     parser.add_argument("--layer_stride", default=1, type=int, help="patch every k-th layer (the last layer is always included).")
     parser.add_argument("--num_last_tokens", default=1, type=int, help="number of final prompt tokens to patch (1 = last token only; up to 5 are identical chat-template tokens).")

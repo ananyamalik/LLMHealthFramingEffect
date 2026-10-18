@@ -22,6 +22,7 @@ python3 -u run_layer_sweep.py \
     --model "$MODEL" \
     --input_path "$INPUT_PATH" \
     --output_dir "$OUTPUT_DIR/sweep" \
+    --contrast "$CONTRAST" \
     --num_reviews $NUM_REVIEWS \
     --max_new_tokens $MAX_NEW_TOKENS \
     --num_last_tokens 1

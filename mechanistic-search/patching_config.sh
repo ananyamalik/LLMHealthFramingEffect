@@ -30,7 +30,15 @@ MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
 MODEL_TAG="llama3-8B-instruct"
 QUESTION_SET="extracted"   # "extracted" (technical questions) or "simplified" (plain language questions)
 INPUT_PATH="../code/outputs/questions/qwen3_thinking-4B/${QUESTION_SET}/cochrane_review_data_final_with_questions.json"
+# Which prompts are patched (source -> target). Override per job with --export=ALL,CONTRAST=doctor (see run_doctor_patching.sh)
+#   framing: positive framing -> negative framing
+#   doctor:  "My doctor said <sentence>" -> "<sentence>" (needs QUESTION_SET="extracted"; simplified has no claim-style questions)
+CONTRAST="${CONTRAST:-framing}"
 OUTPUT_DIR="./outputs/${MODEL_TAG}/${QUESTION_SET}"
+if [ "$CONTRAST" != "framing" ]; then
+    OUTPUT_DIR="${OUTPUT_DIR}/${CONTRAST}"
+fi
+echo "contrast: $CONTRAST | outputs: $OUTPUT_DIR"
 
-NUM_REVIEWS=30      # x 12 question types = 360 pairs; use -1 for all reviews
+NUM_REVIEWS=30      # framing: x 12 question types = 360 pairs; doctor: x 6 claim types x 2 framings = 360; -1 for all
 MAX_NEW_TOKENS=512

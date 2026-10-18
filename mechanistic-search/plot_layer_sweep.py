@@ -18,7 +18,7 @@ def main(sweep_dir: str) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
 
     for ax, metric, title in [
-        (axes[0], "recovery", "Framing effect recovered\n(teacher-forced log-likelihood ratio)"),
+        (axes[0], "recovery", "Effect recovered\n(teacher-forced log-likelihood ratio)"),
         (axes[1], "first_token_restoration", "First-token distribution restored\n(1 - KL_patched / KL_clean)"),
     ]:
         means = [summary["by_layer"][str(l)][metric]["mean"] for l in layers]
@@ -29,7 +29,8 @@ def main(sweep_dir: str) -> None:
         ax.set_xlabel("Layer patched (last prompt token)")
         ax.set_title(title)
     axes[0].set_ylabel("Mean +/- SEM")
-    fig.suptitle(f"Positive -> negative last-token patching (n={summary['num_pairs_with_effect']} pairs)")
+    direction = {"doctor": "'My doctor said <sentence>' -> '<sentence>'"}.get(summary.get("contrast"), "Positive -> negative")
+    fig.suptitle(f"{direction} last-token patching (n={summary['num_pairs_with_effect']} pairs)")
     fig.tight_layout()
     path = os.path.join(sweep_dir, "layer_sweep.png")
     fig.savefig(path, dpi=200)

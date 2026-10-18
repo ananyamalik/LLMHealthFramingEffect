@@ -11,7 +11,10 @@ Outputs (in --output_dir/responses):
                                              (the clean negative is kept as clean_negative_answer)
 
 Both use the same layout as code/outputs/responses/<model>/question_responses.json, so they can be scored with
-code/run_evaluation.py --data_type framing. If patching removes the framing effect, the patched files should look more
+code/run_evaluation.py --data_type framing.
+
+For --contrast doctor sweeps, positive_* is the "My doctor said <sentence>" run and negative_* the bare "<sentence>" run,
+so the patched negative_answer is the bare prompt with the doctor-attributed activations patched in. If patching removes the framing effect, the patched files should look more
 like the baseline (positive vs. positive) evaluation than the clean file does.
 """
 import argparse

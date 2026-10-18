@@ -12,6 +12,8 @@ so the last token before generation is the same token in both runs. We cache the
 decoder layer) at that last position in the POSITIVE run, and overwrite the residual stream at the last position of
 the NEGATIVE run at a single layer L with it. Everything after layer L at that position (and every later token, which
 attends to it) is then computed from the patched state.
+
+The same machinery is used for other contrasts (see CONTRASTS below), e.g. "My doctor said <sentence>" -> "<sentence>".
 """
 import os
 import sys
@@ -156,6 +158,61 @@ def get_question_types(example: dict, requested: list[str] | None) -> list[str]:
     if requested:
         q_types = [k for k in q_types if k in requested]
     return q_types
+
+
+# Contrasts: which two prompts are compared. The SOURCE prompt's residual stream is cached and patched into the TARGET
+# prompt. Pair records keep the original field names, so positive_* = source and negative_* = target.
+#   framing: source = positive framing, target = negative framing (same question type)
+#   doctor:  source = "My doctor said <sentence>", target = "<sentence>", where <sentence> is a claim-style question
+#            with its attribution removed (e.g. "AI said that X works well for Y. Is this true?" ->
+#            "X works well for Y. Is this true?"). Done for both the positive and negative framing of each claim.
+CONTRASTS = ["framing", "doctor"]
+DOCTOR_PREFIX = "My doctor said"
+ATTRIBUTION_PREFIXES = {  # claim-style question types (code/prompts/question_templates.json) and their attribution
+    "doctor": "My doctor says ",
+    "ai": "AI said that ",
+    "testimonials": "I read online testimonials that ",
+    "journals": "I read online journal articles that ",
+    "friend": "My friend said ",
+    "family": "My family said ",
+}
+
+
+def strip_attribution(question: str, q_type: str) -> str:
+    prefix = ATTRIBUTION_PREFIXES[q_type]
+    if not question.startswith(prefix):
+        raise ValueError(f"'{q_type}' question does not start with '{prefix}': {question}")
+    return question[len(prefix):]
+
+
+def get_prompt_pairs(example: dict, contrast: str, requested: list[str] | None) -> list[dict]:
+    """[{question_key, source_question, target_question}] for one review under the given contrast."""
+    if contrast == "framing":
+        return [
+            {
+                "question_key": q_key,
+                "source_question": example["Questions"][q_key]["positive_question"],
+                "target_question": example["Questions"][q_key]["negative_question"],
+            }
+            for q_key in get_question_types(example, requested)
+        ]
+
+    if contrast == "doctor":
+        q_types = [k for k in ATTRIBUTION_PREFIXES if k in example["Questions"]]
+        if requested:
+            q_types = [k for k in q_types if k in requested]
+        pairs = []
+        for q_type in q_types:
+            for framing in ["positive", "negative"]:
+                sentence = strip_attribution(example["Questions"][q_type][f"{framing}_question"], q_type)
+                pairs.append({
+                    "question_key": f"{q_type}_{framing}",
+                    "source_question": f"{DOCTOR_PREFIX} {sentence}",
+                    "target_question": sentence,
+                })
+        return pairs
+
+    raise ValueError(f"Unknown contrast '{contrast}' (options: {CONTRASTS})")
 
 
 # Caching and patching
