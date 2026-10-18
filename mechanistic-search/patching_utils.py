@@ -59,15 +59,24 @@ def get_hf_token() -> str | None:
             load_dotenv(path, override=False)
     print(f".env files loaded: {', '.join(p for p in ENV_FILE_PATHS if os.path.isfile(p)) or 'none'}")
 
-    for var in ["HF_TOKEN", "HUGGINGFACE_TOKEN"]:
-        token = os.getenv(var)
-        if not token:
-            continue
+    # Candidates: env vars (any capitalization, e.g. HF_token), then tokens saved by `huggingface-cli login`
+    # (the job sets HF_HOME to scratch, so the default ~/.cache/huggingface/token would otherwise be missed)
+    candidates = []
+    for name in ["HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN"]:
+        for var, value in os.environ.items():
+            if var.upper() == name and value.strip():
+                candidates.append((f"${var}", value.strip()))
+    for path in [os.path.join(os.getenv("HF_HOME", ""), "token"), os.path.expanduser("~/.cache/huggingface/token")]:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                candidates.append((path, f.read().strip()))
+
+    for source, token in candidates:
         try:
-            print(f"Using {var} (HF user: {whoami(token=token)['name']})")
+            print(f"Using HF token from {source} (HF user: {whoami(token=token)['name']})")
             return token
         except Exception as e:
-            print(f"{var} is set but invalid ({type(e).__name__}); trying the next one")
+            print(f"HF token from {source} is invalid ({type(e).__name__}); trying the next one")
     print("No valid HF token found")
     return None
 
