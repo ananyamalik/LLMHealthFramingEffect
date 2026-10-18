@@ -41,10 +41,23 @@ def set_global_seed(seed_value: int = SEED) -> None:
 
 
 # Model loading
+REPO_DIR = os.path.dirname(CODE_DIR)
+ENV_FILE_PATHS = [os.path.join(REPO_DIR, ".env"), os.path.join(os.path.dirname(REPO_DIR), ".env"), os.path.expanduser("~/.env")]
+
+
+def get_hf_token() -> str | None:
+    """HF token from the repo .env, the .env one level above the repo, or ~/.env (as HUGGINGFACE_TOKEN or HF_TOKEN)."""
+    for path in ENV_FILE_PATHS:
+        if os.path.isfile(path):
+            load_dotenv(path, override=False)
+    token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+    print(f"HF token found: {token is not None} (checked {', '.join(p for p in ENV_FILE_PATHS if os.path.isfile(p)) or 'no .env files'})")
+    return token
+
+
 def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
     logging.basicConfig(level=logging.ERROR)
-    load_dotenv(override=True)
-    access_token = os.getenv("HUGGINGFACE_TOKEN")
+    access_token = get_hf_token()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, token=access_token)
     tokenizer.pad_token = tokenizer.eos_token
