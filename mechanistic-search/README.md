@@ -27,8 +27,12 @@ Multiturn questions are skipped.
 
 ```bash
 cd mechanistic-search
-sbatch run_activation_patching.sh
+mkdir -p logs
+jid=$(sbatch --parsable run_layer_sweep.sh)                     # job 1: layer sweep + plots
+sbatch --dependency=afterok:$jid run_patched_generation.sh      # job 2: starts only if job 1 succeeds
 ```
+
+Shared settings (conda env, model, question set, number of reviews) live in `patching_config.sh`.
 
 - You need access to the gated `meta-llama/Meta-Llama-3-8B-Instruct` model, and `HUGGINGFACE_TOKEN` must be in the repo `.env`.
 - Both stages append to `.jsonl` files and resume where they stopped, so after a timeout you only need to resubmit.
