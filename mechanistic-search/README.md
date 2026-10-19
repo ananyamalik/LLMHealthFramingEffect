@@ -40,7 +40,8 @@ Same two stages, but the source prompt is `"My doctor said <sentence>"` and the 
 `<sentence>` is each claim-style question (`doctor`, `ai`, `testimonials`, `journals`, `friend`, `family`) with its
 attribution removed, in both framings, e.g. `"AI said that X works well for Y. Is this true?"` gives
 `"My doctor said X works well for Y. Is this true?"` and `"X works well for Y. Is this true?"`. Question keys are
-`<type>_<positive|negative>`. In the outputs, `positive_*` is the doctor run and `negative_*` the bare run.
+`<type>_<positive|negative>`. `ai`, `testimonials` and `journals` give the same sentence (as do `friend` and `family`),
+so only `doctor_*`, `ai_*` and `friend_*` are kept: 6 pairs per review. In the outputs, `positive_*` is the doctor run and `negative_*` the bare run.
 Only the `extracted` question set has claim-style questions.
 
 ```bash
@@ -75,3 +76,18 @@ python3 -u run_evaluation.py \
     --eval_path outputs/questions/qwen3_thinking-4B/extracted/evidence_direction_questions_final.json \
     --data_type framing
 ```
+
+### Doctor comma patching (`run_comma_patching.py`)
+
+Source `"My doctor said, <xyz>"`, target `"<xyz>"` (same claims as the doctor contrast; the claim tokens and everything
+after them are checked to be identical). The source's residual stream at the comma token is written into the target at
+layer L at one position, in two separate setups: `before` (the token right before `<xyz>`, end of `**QUESTION**:`) and
+`after` (the token right after `<xyz>`). Recovery is computed as in the layer sweep. Defaults: layers 0, 5, ..., 30 and
+the first 15 reviews of the main sweeps' 30-review sample (90 pairs).
+
+```bash
+sbatch run_comma_patching.sh    # outputs in outputs/<model_tag>/extracted/doctor/comma/
+```
+
+Each record logs the patched tokens (`positions.before_token`, `positions.after_token`) and whether the claim's last
+token is merged with the next character (`last_claim_token_straddles`).

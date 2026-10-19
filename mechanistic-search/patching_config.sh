@@ -40,5 +40,5 @@ if [ "$CONTRAST" != "framing" ]; then
 fi
 echo "contrast: $CONTRAST | outputs: $OUTPUT_DIR"
 
-NUM_REVIEWS=30      # framing: x 12 question types = 360 pairs; doctor: x 6 claim types x 2 framings = 360; -1 for all
+NUM_REVIEWS=30      # framing: x 12 question types = 360 pairs; doctor: x 3 distinct claims x 2 framings = 180; -1 for all
 MAX_NEW_TOKENS=512

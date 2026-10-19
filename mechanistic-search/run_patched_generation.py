@@ -30,7 +30,7 @@ from patching_utils import (
     format_rct_inputs, build_prompt_ids, load_dataset,
     get_positive_cache, patch_residual, last_positions, greedy_generate,
 )
-from run_layer_sweep import PAIRS_FILE_NAME, SUMMARY_FILE_NAME
+from run_layer_sweep import PAIRS_FILE_NAME, SUMMARY_FILE_NAME, dedupe_records
 
 GENERATIONS_FILE_NAME = "patched_generations.jsonl"
 DATASET_COLUMNS_TO_DROP = ["Questions"]
@@ -102,7 +102,7 @@ def main(args):
     set_global_seed(SEED)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    pairs = load_jsonl(os.path.join(args.sweep_dir, PAIRS_FILE_NAME))
+    pairs = dedupe_records(load_jsonl(os.path.join(args.sweep_dir, PAIRS_FILE_NAME)))
     if not pairs:
         raise FileNotFoundError(f"No stage 1 pairs found in {args.sweep_dir}. Run run_layer_sweep.py first.")
     if args.debug:

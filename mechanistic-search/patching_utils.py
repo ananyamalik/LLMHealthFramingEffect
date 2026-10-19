@@ -201,10 +201,14 @@ def get_prompt_pairs(example: dict, contrast: str, requested: list[str] | None) 
         q_types = [k for k in ATTRIBUTION_PREFIXES if k in example["Questions"]]
         if requested:
             q_types = [k for k in q_types if k in requested]
-        pairs = []
+        # ai/testimonials/journals (and friend/family) share a sentence once the attribution is removed; keep the first
+        pairs, seen = [], set()
         for q_type in q_types:
             for framing in ["positive", "negative"]:
                 sentence = strip_attribution(example["Questions"][q_type][f"{framing}_question"], q_type)
+                if sentence in seen:
+                    continue
+                seen.add(sentence)
                 pairs.append({
                     "question_key": f"{q_type}_{framing}",
                     "source_question": f"{DOCTOR_PREFIX} {sentence}",

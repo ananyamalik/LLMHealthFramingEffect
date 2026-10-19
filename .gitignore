@@ -213,4 +213,4 @@ __marimo__/
 
 logs/
 *.txt
-output/
+outputs/

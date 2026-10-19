@@ -44,6 +44,17 @@ def pair_key(review_id, question_key: str) -> str:
     return f"{review_id}_{question_key}"
 
 
+def dedupe_records(records: list[dict]) -> list[dict]:
+    """Drop records whose (review, source prompt, target prompt) was already seen (older doctor sweeps scored some twice)."""
+    seen, out = set(), []
+    for record in records:
+        key = (record["review_id"], record["positive_question"], record["negative_question"])
+        if key not in seen:
+            seen.add(key)
+            out.append(record)
+    return out
+
+
 def load_done_pairs(pairs_path: str) -> set[str]:
     if not os.path.exists(pairs_path):
         return set()
@@ -118,7 +129,7 @@ def aggregate(values: list[float]) -> dict:
 
 def summarize(pairs_path: str, summary_path: str) -> dict:
     with open(pairs_path, "r", encoding="utf-8") as f:
-        records = [json.loads(line) for line in f if line.strip()]
+        records = dedupe_records([json.loads(line) for line in f if line.strip()])
 
     per_layer = {}                # layer -> metric -> values
     per_qtype = {}                # question type -> layer -> recovery values
