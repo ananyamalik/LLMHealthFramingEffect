@@ -99,6 +99,9 @@ def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
     print(f"Model's dtype:    {model.dtype}")
     print(f"Model's device:   {model.device}")
     print(f"Number of layers: {len(get_decoder_layers(model))}")
+    offloaded = {k: v for k, v in (getattr(model, "hf_device_map", None) or {}).items() if v in ("cpu", "disk")}
+    if offloaded:
+        print(f"WARNING: {len(offloaded)} modules offloaded to CPU/disk (not enough free GPU memory); runs will be very slow: {offloaded}")
     print()
     return model, tokenizer
 
@@ -314,7 +317,9 @@ def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tenso
 
     # Only project the positions we need through the LM head (avoids a [seq_len, vocab] logits tensor)
     hidden = model.model(input_ids=full_ids, use_cache=False).last_hidden_state
-    hidden = hidden[:, prompt_len - 1: full_ids.shape[1] - 1, :].to(model.lm_head.weight.device)
+    # No manual .to(): with device_map="auto" accelerate moves inputs to lm_head's device, and an offloaded lm_head's
+    # weight sits on the meta device
+    hidden = hidden[:, prompt_len - 1: full_ids.shape[1] - 1, :]
     log_probs = torch.log_softmax(model.lm_head(hidden).float(), dim=-1)[0]  # [n_resp, vocab]
 
     targets = response_ids.to(log_probs.device)
