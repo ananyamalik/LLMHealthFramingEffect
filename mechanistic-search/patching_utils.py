@@ -310,12 +310,15 @@ def greedy_generate(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
 @torch.no_grad()
 def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tensor,
                       prompt_attention_mask: torch.Tensor | None = None,
-                      prompt_position_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+                      prompt_position_ids: torch.Tensor | None = None,
+                      full_attention_mask: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Teacher-forced pass over prompt + response.
 
     prompt_attention_mask / prompt_position_ids ([1, prompt_len]) are optional: a 0 in the mask hides that prompt token
     from every later token, and the response continues the prompt's position ids (see masked_prompt_inputs).
+    full_attention_mask is an optional additive 4D mask [1, 1, seq, seq] over prompt + response (0 = attend, dtype min =
+    blocked) for query-specific blocking (see blocked_attention_mask); it replaces prompt_attention_mask.
 
     :return: (per-token log-probs of the response tokens [n_resp], log-probs of the next-token distribution at the
               last prompt position [vocab]) -- both float32 on CPU.
@@ -325,7 +328,9 @@ def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tenso
     full_ids = torch.cat([prompt_ids, response_ids.unsqueeze(0).to(prompt_ids.device)], dim=1)
 
     kwargs = {}
-    if prompt_attention_mask is not None:
+    if full_attention_mask is not None:
+        kwargs["attention_mask"] = full_attention_mask
+    elif prompt_attention_mask is not None:
         kwargs["attention_mask"] = torch.cat([prompt_attention_mask, prompt_attention_mask.new_ones(1, n_resp)], dim=1)
     if prompt_position_ids is not None:
         response_positions = prompt_position_ids[:, -1:] + 1 + torch.arange(n_resp, device=prompt_position_ids.device)
@@ -352,6 +357,17 @@ def masked_prompt_inputs(prompt_ids: torch.Tensor, masked_positions: list[int]) 
     attention_mask[0, masked_positions] = 0
     position_ids = (attention_mask.cumsum(dim=1) - 1).clamp(min=0)
     return attention_mask, position_ids
+
+
+def blocked_attention_mask(seq_len: int, blocked_queries: list[int], blocked_keys: list[int], dtype, device) -> torch.Tensor:
+    """Additive 4D causal mask [1, 1, seq_len, seq_len] where `blocked_queries` cannot attend to `blocked_keys`."""
+    min_value = torch.finfo(dtype).min
+    mask = torch.full((seq_len, seq_len), min_value, dtype=dtype, device=device).triu(1)
+    if blocked_queries and blocked_keys:
+        queries = torch.tensor(blocked_queries, device=device)
+        keys = torch.tensor(blocked_keys, device=device)
+        mask[queries.unsqueeze(1), keys.unsqueeze(0)] = min_value
+    return mask[None, None]
 
 
 def kl_divergence(log_p: torch.Tensor, log_q: torch.Tensor) -> float:

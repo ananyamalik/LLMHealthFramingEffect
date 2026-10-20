@@ -113,3 +113,15 @@ sbatch --job-name=patch_span_framing run_span_patching.sh framing          # out
 sbatch --job-name=patch_span_docfriend run_span_patching.sh doctor_friend  # outputs/<model_tag>/extracted/doctor_friend/span/
 sbatch --job-name=patch_span_docmask run_span_patching.sh doctor_masked      # outputs/<model_tag>/extracted/doctor_masked/span/
 ```
+
+### Attention ablation (`run_attention_ablation.py`): is the doctor prefix read directly?
+
+Necessity test complementing the patching (sufficiency) runs. In the `"My doctor said, <xyz>"` run, attention to the
+prefix tokens is blocked at every layer for: `answer_blocked` (the last prompt token and all answer tokens),
+`prompt_blocked` (the prompt tokens after the prefix, except the last), `all_blocked` (both), and `none` (sanity check:
+must reproduce the clean doctor run; the script stops if it does not). Reported as the fraction of the doctor effect
+remaining, `(D_ablated - D_bare) / (D_doctor - D_bare)`: 1 = intact, 0 = bare prompt. 30 reviews, 180 pairs.
+
+```bash
+sbatch --gres=gpu:a100:1 run_attention_ablation.sh    # outputs/<model_tag>/extracted/doctor/attention_ablation/
+```
