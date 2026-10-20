@@ -224,9 +224,10 @@ def get_prompt_pairs(example: dict, contrast: str, requested: list[str] | None) 
 
 # Caching and patching
 @contextmanager
-def cache_residuals(model, positions: list[int]):
+def cache_residuals(model, positions: list[int], layer_indices: list[int] | None = None, device=None):
     """
-    Context manager that records the residual stream (decoder layer output) at `positions` for every layer.
+    Context manager that records the residual stream (decoder layer output) at `positions` for every layer (or only
+    `layer_indices`), optionally moved to `device` (e.g. "cpu" to keep long caches off the GPU).
     Yields a dict {layer_idx: tensor [len(positions), d_model]} that is filled during the forward pass.
     """
     layers = get_decoder_layers(model)
@@ -236,11 +237,13 @@ def cache_residuals(model, positions: list[int]):
     def make_hook(layer_idx):
         def hook(module, inputs, output):
             hidden_states = output[0] if isinstance(output, tuple) else output
-            cache[layer_idx] = hidden_states[0, positions, :].detach().clone()
+            values = hidden_states[0, positions, :].detach()
+            cache[layer_idx] = values.to(device) if device is not None else values.clone()
         return hook
 
     for layer_idx, layer in enumerate(layers):
-        handles.append(layer.register_forward_hook(make_hook(layer_idx)))
+        if layer_indices is None or layer_idx in layer_indices:
+            handles.append(layer.register_forward_hook(make_hook(layer_idx)))
     try:
         yield cache
     finally:

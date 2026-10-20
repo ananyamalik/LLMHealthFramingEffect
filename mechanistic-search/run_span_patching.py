@@ -144,8 +144,9 @@ def prepare_masked_pair(tokenizer, src_ids, bare_ids, src_question: str, claim: 
 
 
 @torch.no_grad()
-def get_source_cache(model, src_ids: torch.Tensor, positions: list[int]) -> dict[int, torch.Tensor]:
-    with cache_residuals(model, positions) as cache:
+def get_source_cache(model, src_ids: torch.Tensor, positions: list[int], layers: list[int]) -> dict[int, torch.Tensor]:
+    """Only the patched layers, kept on CPU (the 'after' setup covers ~1.8k positions); patch_residual moves them back."""
+    with cache_residuals(model, positions, layer_indices=layers, device="cpu") as cache:
         model.model(input_ids=src_ids, use_cache=False)
     return dict(cache)
 
@@ -171,7 +172,7 @@ def score_pair(model, src_ids, tgt_ids, src_resp, tgt_resp, positions: dict, lay
         if setup_pos is None:
             continue
         src_pos, tgt_pos = setup_pos
-        cache = get_source_cache(model, src_ids, src_pos)
+        cache = get_source_cache(model, src_ids, src_pos, layers)
         result["patched"][setup] = {}
         for layer_idx in layers:
             with patch_residual(model, layer_idx, tgt_pos, cache[layer_idx]):
