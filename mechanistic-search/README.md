@@ -91,3 +91,25 @@ sbatch run_comma_patching.sh    # outputs in outputs/<model_tag>/extracted/docto
 
 Each record logs the patched tokens (`positions.before_token`, `positions.after_token`) and whether the claim's last
 token is merged with the next character (`last_claim_token_straddles`).
+
+### Span patching (`run_span_patching.py`): positive control and doctor vs friend
+
+The two prompts are split into a shared prefix, the differing tokens and a shared suffix. The source run's residual
+stream is written into the target at layer L in two setups: `diff` (the differing tokens, only when both sides have the
+same number of tokens) and `after` (every position of the shared suffix, aligned from the end).
+
+- `--contrast framing`: positive -> negative question. Positive control: `diff` at early layers should recover most of
+  the effect; `after` shows how much of the framing has moved past the framing words by layer L.
+- `--contrast doctor_friend`: `"My doctor said, <xyz>"` -> `"My friend said, <xyz>"` (same claims as the comma run).
+- `--contrast doctor_masked`: `"My doctor said, <xyz>"` -> the same tokens with `My doctor said,` hidden by the attention
+  mask and the position ids shifted past it. This is the bare `"<xyz>"` prompt at the doctor prompt's positions, with no
+  replacement word; each pair also scores the real bare prompt, and the summary reports the gap
+  (`masked_vs_bare_gap_relative_to_effect`, should be ~0). Setups: `claim` (the `<xyz>` tokens) and `after`.
+
+Pairs with a clean effect below `--min_effect` (default 3) are left out of the summary.
+
+```bash
+sbatch --job-name=patch_span_framing run_span_patching.sh framing          # outputs/<model_tag>/extracted/span/
+sbatch --job-name=patch_span_docfriend run_span_patching.sh doctor_friend  # outputs/<model_tag>/extracted/doctor_friend/span/
+sbatch --job-name=patch_span_docmask run_span_patching.sh doctor_masked      # outputs/<model_tag>/extracted/doctor_masked/span/
+```

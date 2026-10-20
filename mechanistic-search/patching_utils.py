@@ -305,18 +305,31 @@ def greedy_generate(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
 
 
 @torch.no_grad()
-def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tensor,
+                      prompt_attention_mask: torch.Tensor | None = None,
+                      prompt_position_ids: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Teacher-forced pass over prompt + response.
+
+    prompt_attention_mask / prompt_position_ids ([1, prompt_len]) are optional: a 0 in the mask hides that prompt token
+    from every later token, and the response continues the prompt's position ids (see masked_prompt_inputs).
 
     :return: (per-token log-probs of the response tokens [n_resp], log-probs of the next-token distribution at the
               last prompt position [vocab]) -- both float32 on CPU.
     """
     prompt_len = prompt_ids.shape[1]
+    n_resp = response_ids.shape[0]
     full_ids = torch.cat([prompt_ids, response_ids.unsqueeze(0).to(prompt_ids.device)], dim=1)
 
+    kwargs = {}
+    if prompt_attention_mask is not None:
+        kwargs["attention_mask"] = torch.cat([prompt_attention_mask, prompt_attention_mask.new_ones(1, n_resp)], dim=1)
+    if prompt_position_ids is not None:
+        response_positions = prompt_position_ids[:, -1:] + 1 + torch.arange(n_resp, device=prompt_position_ids.device)
+        kwargs["position_ids"] = torch.cat([prompt_position_ids, response_positions], dim=1)
+
     # Only project the positions we need through the LM head (avoids a [seq_len, vocab] logits tensor)
-    hidden = model.model(input_ids=full_ids, use_cache=False).last_hidden_state
+    hidden = model.model(input_ids=full_ids, use_cache=False, **kwargs).last_hidden_state
     # No manual .to(): with device_map="auto" accelerate moves inputs to lm_head's device, and an offloaded lm_head's
     # weight sits on the meta device
     hidden = hidden[:, prompt_len - 1: full_ids.shape[1] - 1, :]
@@ -325,6 +338,17 @@ def response_logprobs(model, prompt_ids: torch.Tensor, response_ids: torch.Tenso
     targets = response_ids.to(log_probs.device)
     token_log_probs = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
     return token_log_probs.cpu(), log_probs[0].cpu()
+
+
+def masked_prompt_inputs(prompt_ids: torch.Tensor, masked_positions: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Attention mask that hides `masked_positions` from every later token, and position ids that skip them, so the visible
+    tokens get exactly the positions they would have if the masked tokens were not in the prompt at all.
+    """
+    attention_mask = torch.ones_like(prompt_ids)
+    attention_mask[0, masked_positions] = 0
+    position_ids = (attention_mask.cumsum(dim=1) - 1).clamp(min=0)
+    return attention_mask, position_ids
 
 
 def kl_divergence(log_p: torch.Tensor, log_q: torch.Tensor) -> float:
