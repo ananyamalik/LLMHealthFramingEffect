@@ -35,7 +35,7 @@ from tqdm import tqdm
 
 from patching_utils import (
     DEFAULT_MODEL_NAME, SEED, DOCTOR_PREFIX, set_global_seed, load_model_and_tokenizer, get_decoder_layers,
-    format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_prompt_pairs, cache_residuals,
+    get_context_length, format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_prompt_pairs, cache_residuals,
     add_to_residual,
 )
 from run_yes_no_patching import TEMPLATE_NAME, TEMPLATE_DIR, YES_STRINGS, NO_STRINGS, single_token_ids, readout
@@ -59,15 +59,21 @@ def encode(tokenizer, question, rct_inputs, device):
 
 
 def framing_pair_states(model, tokenizer, examples, q_types) -> tuple[list, list]:
-    """(h(positive wording), h(negative wording)) per pair for the given question types."""
+    """(h(positive wording), h(negative wording)) per pair for the given question types; pairs longer than the context are skipped."""
     pos, neg = [], []
+    context_length = get_context_length(model)
     for ex in tqdm(examples, desc=f"states {'/'.join(q_types)}"):
         rct = format_rct_inputs(ex["Inputs"])
         for q in q_types:
             if q not in ex["Questions"]:
                 continue
-            pos.append(last_token_states(model, encode(tokenizer, ex["Questions"][q]["positive_question"], rct, model.device)))
-            neg.append(last_token_states(model, encode(tokenizer, ex["Questions"][q]["negative_question"], rct, model.device)))
+            pos_ids = encode(tokenizer, ex["Questions"][q]["positive_question"], rct, model.device)
+            neg_ids = encode(tokenizer, ex["Questions"][q]["negative_question"], rct, model.device)
+            if max(pos_ids.shape[1], neg_ids.shape[1]) > context_length:
+                print(f"Skipping {ex['ReviewID']} {q}: prompt longer than the context length ({context_length})")
+                continue
+            pos.append(last_token_states(model, pos_ids))
+            neg.append(last_token_states(model, neg_ids))
     return pos, neg
 
 
@@ -127,8 +133,11 @@ def main(args):
         rct = format_rct_inputs(ex["Inputs"])
         for pair in get_prompt_pairs(ex, "doctor", None):
             claim, framing = pair["target_question"], pair["question_key"].rsplit("_", 1)[1]
-            for source, template in SOURCES.items():
-                ids = encode(tokenizer, template.format(claim=claim), rct, model.device)
+            source_ids = {s: encode(tokenizer, t.format(claim=claim), rct, model.device) for s, t in SOURCES.items()}
+            if max(ids.shape[1] for ids in source_ids.values()) > get_context_length(model):
+                print(f"Skipping {ex['ReviewID']} {pair['question_key']}: prompt longer than the context length")
+                continue
+            for source, ids in source_ids.items():
                 h = last_token_states(model, ids)
                 key = (ex["ReviewID"], pair["question_key"], source)
                 states[key] = h
@@ -187,6 +196,8 @@ def main(args):
         for ex in tqdm(test_reviews, desc="steering"):
             rct = format_rct_inputs(ex["Inputs"])
             for pair in get_prompt_pairs(ex, "doctor", None):
+                if (ex["ReviewID"], pair["question_key"], args.steer_source) not in by_key:   # skipped for length
+                    continue
                 ids = encode(tokenizer, SOURCES[args.steer_source].format(claim=pair["target_question"]), rct, model.device)
                 base = by_key[(ex["ReviewID"], pair["question_key"], args.steer_source)]["readout_d"]
                 for name, dvec in steer_dirs.items():

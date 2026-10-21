@@ -35,7 +35,7 @@ from tqdm import tqdm
 
 from patching_utils import (
     DEFAULT_MODEL_NAME, SEED, DOCTOR_PREFIX, set_global_seed, load_model_and_tokenizer, get_decoder_layers,
-    format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_prompt_pairs, cache_residuals,
+    get_context_length, format_rct_inputs, build_prompt_ids, load_dataset, sample_reviews, get_prompt_pairs, cache_residuals,
     patch_residual,
 )
 from run_layer_sweep import pair_key, load_done_pairs, aggregate
@@ -214,6 +214,9 @@ def main(args):
                                            template_name=TEMPLATE_NAME, template_dir=TEMPLATE_DIR)
                 tgt_ids = build_prompt_ids(tokenizer, prompt_pair["target_question"], rct_inputs, model.device,
                                            template_name=TEMPLATE_NAME, template_dir=TEMPLATE_DIR)
+                if max(src_ids.shape[1], tgt_ids.shape[1]) > get_context_length(model):
+                    print(f"Skipping {key}: prompt longer than the context length ({get_context_length(model)})")
+                    continue
                 spans = find_spans(tokenizer, src_ids, tgt_ids)
                 metrics = score_pair(model, src_ids, tgt_ids, spans, layers, yes_ids, no_ids)
 
