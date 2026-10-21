@@ -296,11 +296,16 @@ def get_positive_cache(model, pos_ids: torch.Tensor, num_last_tokens: int) -> di
 
 
 @torch.no_grad()
-def greedy_generate(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
-    """Greedy decoding (deterministic so clean vs. patched differences are due to the patch). Returns new token ids [n]."""
+def greedy_generate(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: int,
+                    attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+    """
+    Greedy decoding (deterministic so clean vs. patched differences are due to the patch). Returns new token ids [n].
+    attention_mask ([1, prompt_len]) can hide prompt tokens (see masked_prompt_inputs); generate then derives position ids
+    from its cumulative sum, so hidden tokens take no positions.
+    """
     output = model.generate(
         input_ids,
-        attention_mask=torch.ones_like(input_ids),
+        attention_mask=attention_mask if attention_mask is not None else torch.ones_like(input_ids),
         max_new_tokens=max_new_tokens,
         do_sample=False,
         temperature=None,
