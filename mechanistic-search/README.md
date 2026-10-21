@@ -141,3 +141,61 @@ sbatch --gres=gpu:a100:1 --job-name=yesno_framing run_yes_no_patching.sh framing
 sbatch --gres=gpu:a100:1 --job-name=yesno_doctor  run_yes_no_patching.sh doctor    # .../extracted/doctor/yes_no/
 sbatch --gres=gpu:a100:1 --job-name=yesno_docfr   run_yes_no_patching.sh doctor_friend
 ```
+
+### Credibility direction and steering (`run_credibility_direction.py`)
+
+Is there one source-token direction that tracks how much the model agrees with a source, and does adding it cause
+agreement to rise steadily? Uses the Yes/No prompt with the claim attributed to one of 8 sources (`my doctor`,
+`my pharmacist`, `my nurse`, `my friend`, `my neighbor`, `a stranger`, `a website`, `an AI`) in two frames
+(`"<Source> said, <claim>"`, `"According to <source>, <claim>"`), plus the bare claim. The claims are the doctor
+contrast's (3 per review, each "will work" and "won't work"). Every source is a single token at the same position, and
+the "said" doctor/friend prompts are exactly the `doctor_friend` Yes/No prompts.
+
+Agreement is signed so it means "agrees with the source" in both polarities: `A = log p(Yes) - log p(No)` for
+"will work" claims and its negative for "won't work" claims. A source's effect is `A(source) - A(bare claim)`.
+
+1. `behavior`: the effect of each source (by frame and polarity), and the residual stream at the source token at every
+   layer. The source token comes before the claim, so its activation is the same for every claim (checked and logged).
+2. `direction` (CPU, no model): per layer, with activations centered over sources, `doctor_minus_friend`, `pls_all`
+   (behavior-weighted mean difference), `pls_heldout` (the same without doctor and friend) and `pc1` (no behavior used).
+   Each is scored by Spearman rho between the sources' projections and their behavioral effect: over all sources,
+   without doctor (it should not just be "doctor vs everything else"), on sources not used to fit it, leave one source
+   out for `pls_all` (permutation p), and across frames. `credibility_coordinate` puts sources on a friend = 0,
+   doctor = 1 scale; `a stranger` is the neutral reference.
+3. `steer`: adds `alpha * gap_L * v_L` at the friend prompt's source token at layer L (default layers 2, 4, 6, 8, where
+   the source word is still causal), with `gap_L` the doctor-friend gap along `v_L`, so `alpha = 1` moves friend's
+   projection to doctor's. Default direction `pls_heldout`, so neither endpoint is used to fit it, with 2 matched-norm
+   random directions as controls. Evidence for a causal, claim-independent credibility representation: agreement rises
+   monotonically with alpha for both polarities (`monotonic_increasing`, `mean_slope_per_alpha`,
+   `fraction_pairs_positive_slope` in the summary) and stays flat for the random directions. The dotted lines in the
+   plot mark the real doctor-friend gap.
+
+```bash
+sbatch --gres=gpu:a100:1 run_credibility_direction.sh             # outputs/<model_tag>/extracted/credibility/
+sbatch --gres=gpu:a100:1 run_credibility_direction.sh --determiner indefinite \
+    --output_dir ./outputs/llama3-8B-instruct/extracted/credibility_indefinite    # "a doctor", "a friend": no "my" vs "a" confound
+```
+
+Other options: `--steer_directions doctor_minus_friend pls_all`, `--steer_span source_to_end` (add at every token from
+the source on), `--steer_sources friend stranger`, `--alphas`, `--steer_layers`, `--stages direction` (reanalyze only).
+
+### Conflicting doctor claims (`run_conflict_patching.py`)
+
+Two doctor claims with opposite polarity in one question, same Yes/No prompt and readout as above:
+*"My doctor said X will work for Y, but my doctor also said X won't work for Y. What do you think?"* (and the reverse
+order; the claims come from the `doctor` and `ai` questions with the attribution and follow-up removed). Each record
+also scores `++`, `--` (same connective) and the single claims `+` and `-`.
+
+- Behaviour: `negative_weight = (D(conflict) - D(+)) / (D(-) - D(+))`, 0 = the positive claim wins, 1 = the negative
+  claim wins. The mean over the two orders measures the negativity preference; `weight(+-) - weight(-+)` measures
+  recency (> 0 = the later claim wins).
+- Patching: for each conflict prompt and each claim, the source is the same prompt with that claim flipped (`+-`, claim
+  1 -> `--`). Setups `last`, `after` (every token after the flipped words) and `diff` (only when the flipped words have
+  the same number of tokens). Shows when each claim's polarity reaches the answer position, and `abs_slot_effect` shows
+  how much each claim moves the answer at all.
+
+```bash
+sbatch --gres=gpu:a100:1 run_conflict_patching.sh    # outputs/<model_tag>/extracted/doctor_conflict/yes_no/
+```
+
+`--connective ", but my friend said"` gives a doctor-vs-friend conflict with the same analysis.

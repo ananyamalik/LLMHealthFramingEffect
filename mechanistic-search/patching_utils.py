@@ -281,6 +281,28 @@ def patch_residual(model, layer_idx: int, positions: list[int], patch_values: to
         handle.remove()
 
 
+@contextmanager
+def steer_residual(model, layer_idx: int, positions: list[int], vector: torch.Tensor):
+    """
+    Context manager that adds `vector` ([d_model]) to the residual stream output of decoder layer `layer_idx` at
+    `positions`. Like patch_residual, only forward passes that contain those positions are changed.
+    """
+    layer = get_decoder_layers(model)[layer_idx]
+    max_position = max(positions)
+
+    def hook(module, inputs, output):
+        hidden_states = output[0] if isinstance(output, tuple) else output
+        if hidden_states.shape[1] > max_position:
+            hidden_states[0, positions, :] += vector.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        return output
+
+    handle = layer.register_forward_hook(hook)
+    try:
+        yield
+    finally:
+        handle.remove()
+
+
 def last_positions(seq_len: int, num_last_tokens: int) -> list[int]:
     """Indices of the last `num_last_tokens` prompt tokens (these are identical chat-template tokens in both framings)."""
     return list(range(seq_len - num_last_tokens, seq_len))
