@@ -125,3 +125,19 @@ remaining, `(D_ablated - D_bare) / (D_doctor - D_bare)`: 1 = intact, 0 = bare pr
 ```bash
 sbatch --gres=gpu:a100:1 run_attention_ablation.sh    # outputs/<model_tag>/extracted/doctor/attention_ablation/
 ```
+
+### Yes/No readout (`run_yes_no_patching.py`)
+
+Checks whether the last-token null comes from the long-form metric. The prompt
+(`prompts/question_answering_yes_no.jinja2`) keeps the framed question and article summaries and ends with one fixed
+follow-up: *Based on the article summaries, does the treatment in the QUESTION work? Answer with only "Yes" or "No".*
+The readout is `log p(Yes) - log p(No)` at the last prompt position (no generation). Setups: `last` (last prompt token)
+and `diff` (differing tokens, when both sides have the same length), at every layer. Contrasts: `framing`, `doctor`,
+`doctor_friend`. Expected if the long-form metric was the issue: `last` near 0 at early layers, rising to ~1 in middle
+and late layers (it is 1 at the final layer by construction).
+
+```bash
+sbatch --gres=gpu:a100:1 --job-name=yesno_framing run_yes_no_patching.sh framing   # outputs/<model_tag>/extracted/yes_no/
+sbatch --gres=gpu:a100:1 --job-name=yesno_doctor  run_yes_no_patching.sh doctor    # .../extracted/doctor/yes_no/
+sbatch --gres=gpu:a100:1 --job-name=yesno_docfr   run_yes_no_patching.sh doctor_friend
+```

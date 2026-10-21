@@ -130,9 +130,13 @@ def format_rct_inputs(rct_inputs: list[dict]) -> list[dict]:
     return [{"title": rct["Title"], "abstract": rct["Abstract"]} for rct in rct_inputs]
 
 
-def build_prompt_ids(tokenizer, question: str, rct_inputs: list[dict], device) -> torch.Tensor:
-    """Render the question-answering prompt and apply the chat template (with generation prompt). Returns [1, seq_len]."""
-    input_text = render_prompt(PROMPT_TEMPLATE_NAME, template_dir="./prompts", question=question, abstracts=rct_inputs)
+def build_prompt_ids(tokenizer, question: str, rct_inputs: list[dict], device,
+                     template_name: str = PROMPT_TEMPLATE_NAME, template_dir: str = "./prompts") -> torch.Tensor:
+    """
+    Render the question-answering prompt and apply the chat template (with generation prompt). Returns [1, seq_len].
+    template_dir is relative to code/ (render_prompt resolves it there); the default is the main pipeline's prompts.
+    """
+    input_text = render_prompt(template_name, template_dir=template_dir, question=question, abstracts=rct_inputs)
     messages = [{"role": "user", "content": input_text}]
     input_ids = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True, return_tensors="pt")
     if not isinstance(input_ids, torch.Tensor):  # newer transformers can return a BatchEncoding
