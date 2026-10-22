@@ -26,8 +26,9 @@ export XDG_CACHE_HOME="/scratch/$USER/.cache"
 # Fail fast if the env is missing anything
 python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('python', __import__('sys').executable, '| torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
 
-MODEL="meta-llama/Meta-Llama-3-8B-Instruct"
-MODEL_TAG="llama3-8B-instruct"
+# Override per job with --export=ALL,MODEL=...,MODEL_TAG=... (see run_olmo_lawyer_patching.sh)
+MODEL="${MODEL:-meta-llama/Meta-Llama-3-8B-Instruct}"
+MODEL_TAG="${MODEL_TAG:-llama3-8B-instruct}"
 QUESTION_SET="extracted"   # "extracted" (technical questions) or "simplified" (plain language questions)
 INPUT_PATH="../code/outputs/questions/qwen3_thinking-4B/${QUESTION_SET}/cochrane_review_data_final_with_questions.json"
 # Which prompts are patched (source -> target). Override per job with --export=ALL,CONTRAST=doctor (see run_doctor_patching.sh)
@@ -38,7 +39,7 @@ OUTPUT_DIR="./outputs/${MODEL_TAG}/${QUESTION_SET}"
 if [ "$CONTRAST" != "framing" ]; then
     OUTPUT_DIR="${OUTPUT_DIR}/${CONTRAST}"
 fi
-echo "contrast: $CONTRAST | outputs: $OUTPUT_DIR"
+echo "model: $MODEL | contrast: $CONTRAST | outputs: $OUTPUT_DIR"
 
 NUM_REVIEWS=30      # framing: x 12 question types = 360 pairs; doctor: x 3 distinct claims x 2 framings = 180; -1 for all
 MAX_NEW_TOKENS=512

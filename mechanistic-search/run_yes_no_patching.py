@@ -14,7 +14,7 @@ Setups (source residual stream written into the target at layer L, every layer):
     diff:  the differing tokens, position by position (only when both sides have the same number of tokens)
 
 Contrasts (--contrast): framing (positive -> negative question), doctor ("My doctor said, <xyz>" -> "<xyz>"),
-doctor_friend ("My doctor said, <xyz>" -> "My friend said, <xyz>").
+doctor_friend ("My doctor said, <xyz>" -> "My friend said, <xyz>"), doctor_lawyer (-> "My lawyer said, <xyz>").
 
 With a single-token readout, last-token recovery is expected to be ~0 at early layers and to rise to ~1 at middle/late
 layers (the last position is where the answer is computed). If so, the near-zero last-token result of the long-form
@@ -43,7 +43,7 @@ from run_span_patching import find_spans, get_span_prompt_pairs, get_group
 
 PAIRS_FILE_NAME = "yes_no_patching_pairs.jsonl"
 SUMMARY_FILE_NAME = "yes_no_patching_summary.json"
-CONTRASTS = ["framing", "doctor", "doctor_friend"]
+CONTRASTS = ["framing", "doctor", "doctor_friend", "doctor_lawyer"]
 TEMPLATE_NAME = "question_answering_yes_no"
 TEMPLATE_DIR = "../mechanistic-search/prompts"   # relative to code/, where render_prompt resolves template dirs
 YES_STRINGS, NO_STRINGS = ["Yes", "yes"], ["No", "no"]
@@ -153,6 +153,7 @@ def plot(summary: dict, output_dir: str) -> None:
         "framing": "Positive -> negative framing",
         "doctor": "'My doctor said,' -> bare claim",
         "doctor_friend": "'My doctor said,' -> 'My friend said,'",
+        "doctor_lawyer": "'My doctor said,' -> 'My lawyer said,'",
     }
     setups = list(dict.fromkeys(s for by_setup in summary["by_group"].values() for s in by_setup))
     fig, axes = plt.subplots(1, len(setups), figsize=(6.5 * len(setups), 4.5), sharey=True, squeeze=False)
@@ -253,7 +254,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Last-token / differing-token patching with a single-token Yes/No readout")
-    parser.add_argument("--contrast", required=True, choices=CONTRASTS, help="framing, doctor, or doctor_friend.")
+    parser.add_argument("--contrast", required=True, choices=CONTRASTS, help="framing, doctor, doctor_friend, or doctor_lawyer.")
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="HuggingFace model name.")
     parser.add_argument("--input_path", required=True, help="dataset with RCT inputs and framed questions (extracted question set).")
     parser.add_argument("--output_dir", required=True, help="directory to save the outputs.")

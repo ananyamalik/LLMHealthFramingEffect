@@ -19,7 +19,7 @@
 #   sbatch --gres=gpu:a100:1 --job-name=yesno_docfr   run_yes_no_patching.sh doctor_friend
 # Resumes from yes_no_patching_pairs.jsonl, so resubmitting after a timeout continues where it left off.
 
-YESNO_CONTRAST="${1:?usage: sbatch run_yes_no_patching.sh <framing|doctor|doctor_friend> [extra python args]}"
+YESNO_CONTRAST="${1:?usage: sbatch run_yes_no_patching.sh <framing|doctor|doctor_friend|doctor_lawyer> [extra python args]}"
 shift
 export CONTRAST="$YESNO_CONTRAST"   # framing -> outputs/<model>/extracted/yes_no, others -> .../<contrast>/yes_no
 source ./patching_config.sh

@@ -199,3 +199,18 @@ sbatch --gres=gpu:a100:1 run_conflict_patching.sh    # outputs/<model_tag>/extra
 ```
 
 `--connective ", but my friend said"` gives a doctor-vs-friend conflict with the same analysis.
+
+### Doctor -> friend variants: OLMo and lawyer (`run_olmo_lawyer_patching.sh`)
+
+Two variants of the `doctor_friend` span and Yes/No runs (same claims, reviews and setups):
+
+1. **OLMo**: `doctor_friend` with `allenai/OLMo-2-0425-1B-Instruct` (16 layers, every layer patched; 4k context, so
+   long prompts are skipped and logged). Outputs in `outputs/olmo2-1B-instruct/extracted/doctor_friend/{span,yes_no}/`.
+2. **Lawyer**: `--contrast doctor_lawyer`, `"My doctor said, <xyz>"` -> `"My lawyer said, <xyz>"`, with Llama 3 8B.
+   Outputs in `outputs/llama3-8B-instruct/extracted/doctor_lawyer/{span,yes_no}/`.
+
+```bash
+bash run_olmo_lawyer_patching.sh    # submits 4 jobs: OLMo span + yes/no, lawyer span + yes/no
+```
+
+The model can be changed for any job through `patching_config.sh`: `sbatch --export=ALL,MODEL=<hf name>,MODEL_TAG=<tag> ...`.

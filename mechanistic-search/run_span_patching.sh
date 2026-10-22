@@ -20,7 +20,7 @@
 #   sbatch run_span_patching.sh framing --debug                                    # 1-review check
 # Resumes from span_patching_pairs.jsonl, so resubmitting after a timeout continues where it left off.
 
-SPAN_CONTRAST="${1:?usage: sbatch run_span_patching.sh <framing|doctor_friend> [extra python args]}"
+SPAN_CONTRAST="${1:?usage: sbatch run_span_patching.sh <framing|doctor_friend|doctor_lawyer> [extra python args]}"
 shift
 export CONTRAST="$SPAN_CONTRAST"   # framing -> outputs/<model>/extracted/span, others -> .../<contrast>/span
 source ./patching_config.sh

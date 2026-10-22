@@ -6,6 +6,7 @@ Contrasts (--contrast):
                    patching the differing words at early layers should recover most of the framing effect.
     doctor_friend  source = "My doctor said, <xyz>", target = "My friend said, <xyz>", with the same claims as
                    run_comma_patching.py.
+    doctor_lawyer  same, with target = "My lawyer said, <xyz>" (another professional, but not a medical one).
     doctor_masked  source = "My doctor said, <xyz>", target = the same tokens with "My doctor said," hidden by the
                    attention mask and the position ids shifted past it, which is the bare "<xyz>" prompt laid out at
                    the source's positions (checked against the real bare prompt for every pair). Setups:
@@ -46,19 +47,20 @@ from run_comma_patching import encode_prompt, claim_token_span
 
 PAIRS_FILE_NAME = "span_patching_pairs.jsonl"
 SUMMARY_FILE_NAME = "span_patching_summary.json"
-CONTRASTS = ["framing", "doctor_friend", "doctor_masked"]
+CONTRASTS = ["framing", "doctor_friend", "doctor_lawyer", "doctor_masked"]
+TARGET_SOURCES = {"doctor_friend": "friend", "doctor_lawyer": "lawyer"}   # "My doctor said, <xyz>" -> "My <source> said, <xyz>"
 
 
 def get_span_prompt_pairs(example: dict, contrast: str) -> list[dict]:
     """[{question_key, source_question, target_question}] for one review."""
     if contrast == "framing":
         return get_prompt_pairs(example, "framing", None)
-    if contrast == "doctor_friend":
+    if contrast in TARGET_SOURCES:
         return [
             {
                 "question_key": p["question_key"],
                 "source_question": f"My doctor said, {p['target_question']}",
-                "target_question": f"My friend said, {p['target_question']}",
+                "target_question": f"My {TARGET_SOURCES[contrast]} said, {p['target_question']}",
             }
             for p in get_prompt_pairs(example, "doctor", None)
         ]
@@ -75,7 +77,7 @@ def get_span_prompt_pairs(example: dict, contrast: str) -> list[dict]:
 
 
 def get_group(contrast: str, question_key: str) -> str:
-    """Summary group besides 'all': question type for framing, positive/negative claim for doctor_friend."""
+    """Summary group besides 'all': question type for framing, positive/negative claim for the doctor contrasts."""
     return question_key if contrast == "framing" else question_key.rsplit("_", 1)[1]
 
 
@@ -247,6 +249,7 @@ def plot(summary: dict, output_dir: str) -> None:
     titles = {
         "framing": "Positive -> negative framing",
         "doctor_friend": "'My doctor said,' -> 'My friend said,'",
+        "doctor_lawyer": "'My doctor said,' -> 'My lawyer said,'",
         "doctor_masked": "'My doctor said,' -> masked prefix",
     }
     setup_titles = {"diff": "differing tokens", "after": "all positions after them", "claim": "the <xyz> tokens"}
@@ -360,7 +363,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Patch the differing tokens, or all positions after them, from source into target")
-    parser.add_argument("--contrast", required=True, choices=CONTRASTS, help="framing (positive control), doctor_friend, or doctor_masked.")
+    parser.add_argument("--contrast", required=True, choices=CONTRASTS, help="framing (positive control), doctor_friend, doctor_lawyer, or doctor_masked.")
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="HuggingFace model name.")
     parser.add_argument("--input_path", required=True, help="dataset with RCT inputs and framed questions (extracted question set).")
     parser.add_argument("--output_dir", required=True, help="directory to save the outputs.")
