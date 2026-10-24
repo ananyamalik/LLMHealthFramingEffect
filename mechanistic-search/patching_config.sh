@@ -22,6 +22,9 @@ export HF_HOME="/scratch/$USER/.cache"
 export HUGGINGFACE_HUB_CACHE="/scratch/$USER/.cache"
 export XDG_CACHE_HOME="/scratch/$USER/.cache"
 
+hostname
+nvidia-smi --query-gpu=name,memory.total --format=csv
+
 # Fail fast if the env is missing anything
 python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
 

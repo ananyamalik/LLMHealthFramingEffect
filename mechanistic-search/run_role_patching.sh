@@ -6,7 +6,8 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=64G
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:1                         # any GPU type
+#SBATCH --exclude=d1025
 #SBATCH -o logs/role_patch_output_%j.txt     # Standard output file
 #SBATCH -e logs/role_patch_error_%j.txt      # Standard error file
 

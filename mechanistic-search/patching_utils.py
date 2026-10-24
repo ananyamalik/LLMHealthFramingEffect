@@ -76,8 +76,10 @@ def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
     tokenizer = AutoTokenizer.from_pretrained(model_name, token=access_token)
     tokenizer.pad_token = tokenizer.eos_token
 
+    # bfloat16 needs compute capability 8.0+ (A100 and newer); older GPUs (V100, T4) only emulate it, so use float16
+    use_bf16 = torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, device_map="auto", dtype=torch.bfloat16, token=access_token,
+        model_name, device_map="auto", dtype=torch.bfloat16 if use_bf16 else torch.float16, token=access_token,
     )
     model.eval()
 
