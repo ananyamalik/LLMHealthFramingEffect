@@ -1,10 +1,9 @@
 #!/bin/bash
-# Shared environment + settings for the two activation patching jobs (sourced by both job scripts).
+# Shared environment + settings for the patching jobs (sourced by run_role_patching.sh).
 
 cd "$SLURM_SUBMIT_DIR"
 
-# Same conda setup as the working rejudge/attention jobs: load the module, then conda's shell hook, then activate.
-# Override the env with: CONDA_ENV=myenv sbatch run_layer_sweep.sh
+# Load the module, then conda's shell hook, then activate. Override the env with: CONDA_ENV=myenv sbatch ...
 CONDA_ENV="${CONDA_ENV:-emotional-safety}"
 module load anaconda3/2024.06
 eval "$(conda shell.bash hook)"
@@ -24,22 +23,12 @@ export HUGGINGFACE_HUB_CACHE="/scratch/$USER/.cache"
 export XDG_CACHE_HOME="/scratch/$USER/.cache"
 
 # Fail fast if the env is missing anything
-python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('python', __import__('sys').executable, '| torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
+python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
 
-# Override per job with --export=ALL,MODEL=...,MODEL_TAG=... (see run_olmo_lawyer_patching.sh)
+# Override per job with --export=ALL,MODEL=...,MODEL_TAG=... (see submit_role_patching.sh). OLMo 3 needs transformers >= 4.57.
 MODEL="${MODEL:-meta-llama/Meta-Llama-3-8B-Instruct}"
 MODEL_TAG="${MODEL_TAG:-llama3-8B-instruct}"
-QUESTION_SET="extracted"   # "extracted" (technical questions) or "simplified" (plain language questions)
-INPUT_PATH="../code/outputs/questions/qwen3_thinking-4B/${QUESTION_SET}/cochrane_review_data_final_with_questions.json"
-# Which prompts are patched (source -> target). Override per job with --export=ALL,CONTRAST=doctor (see run_doctor_patching.sh)
-#   framing: positive framing -> negative framing
-#   doctor:  "My doctor said <sentence>" -> "<sentence>" (needs QUESTION_SET="extracted"; simplified has no claim-style questions)
-CONTRAST="${CONTRAST:-framing}"
-OUTPUT_DIR="./outputs/${MODEL_TAG}/${QUESTION_SET}"
-if [ "$CONTRAST" != "framing" ]; then
-    OUTPUT_DIR="${OUTPUT_DIR}/${CONTRAST}"
-fi
-echo "model: $MODEL | contrast: $CONTRAST | outputs: $OUTPUT_DIR"
-
-NUM_REVIEWS=30      # framing: x 12 question types = 360 pairs; doctor: x 3 distinct claims x 2 framings = 180; -1 for all
-MAX_NEW_TOKENS=512
+INPUT_PATH="../code/outputs/questions/qwen3_thinking-4B/extracted/cochrane_review_data_final_with_questions.json"
+OUTPUT_DIR="./outputs/${MODEL_TAG}/role_patching"
+NUM_REVIEWS="${NUM_REVIEWS:-15}"   # seeded sample of reviews, x 2 framings = 30 pairs per role (dataset has 368)
+echo "model: $MODEL | outputs: $OUTPUT_DIR"
