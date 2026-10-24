@@ -3,7 +3,7 @@ Plots the role-patching summaries, one figure per model: one row per answer type
 (last, comma), one line per role. Missing models / answer types / roles are skipped, so it can be run while jobs are
 still going.
 
-    python plot_role_patching.py [--model_tags llama3-8B-instruct olmo3-7B-instruct] [--group all|positive|negative]
+    python plot_role_patching.py [--model_tags llama3-8B-instruct olmo2-7B-instruct] [--group all|positive|negative]
 """
 import argparse
 import json
@@ -67,7 +67,7 @@ def plot_model(model_tag: str, input_dir: str, group: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot role-patching recovery by layer")
-    parser.add_argument("--model_tags", nargs="+", default=["llama3-8B-instruct", "olmo3-7B-instruct"])
+    parser.add_argument("--model_tags", nargs="+", default=["llama3-8B-instruct", "olmo2-7B-instruct"])
     parser.add_argument("--outputs_dir", default="./outputs", help="summaries are read from <outputs_dir>/<model_tag>/role_patching/.")
     parser.add_argument("--group", default="all", choices=["all", "positive", "negative"])
     args = parser.parse_args()

@@ -50,10 +50,10 @@ pair. For `yes_no`, `d_source - d_target > 0` means the role makes the model say
 | model | HF name | output tag | context |
 |---|---|---|---|
 | Llama 3 8B Instruct | `meta-llama/Meta-Llama-3-8B-Instruct` | `llama3-8B-instruct` | 8k (about 6% of pairs skipped) |
-| OLMo 3 7B Instruct | `allenai/Olmo-3-7B-Instruct` | `olmo3-7B-instruct` | 64k (no pairs skipped) |
+| OLMo 2 7B Instruct | `allenai/OLMo-2-1124-7B-Instruct` | `olmo2-7B-instruct` | 4k (about 15-20% of pairs skipped) |
 
-Both have 32 layers. OLMo 3 needs transformers >= 4.57. OLMo 2 7B Instruct (`allenai/OLMo-2-1124-7B-Instruct`) also
-works with the code, but its 4k context skips about 15-20% of pairs.
+Both have 32 layers. OLMo 3 7B Instruct (`allenai/Olmo-3-7B-Instruct`, 64k context, no pairs skipped) also works
+with the code, but needs transformers >= 4.57.
 
 ## Running (Explorer)
 
@@ -74,7 +74,7 @@ sbatch run_role_patching.sh full --roles enemy --generate_layers 8 16
 - Full-answer jobs generate 2 clean answers and 8 patched answers per pair (2 setups x 4 layers). If a job hits the 8h limit, resubmit it; it continues from the last finished pair.
 
 - Settings (conda env, default model, 15 reviews, i.e. 30 pairs per role; `NUM_REVIEWS=50 bash submit_role_patching.sh` for more) are in `patching_config.sh`. For one job on
-  the other model: `sbatch --export=ALL,MODEL=allenai/Olmo-3-7B-Instruct,MODEL_TAG=olmo3-7B-instruct run_role_patching.sh yes_no`.
+  the other model: `sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_role_patching.sh yes_no`.
 - Jobs append to `pairs.jsonl` and resume where they stopped, so after a timeout you only need to resubmit.
 - Prompts longer than the model's context are skipped and logged; full answers also need room for 512
   new tokens.

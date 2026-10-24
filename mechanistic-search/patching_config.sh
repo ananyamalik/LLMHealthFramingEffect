@@ -28,7 +28,7 @@ nvidia-smi --query-gpu=name,memory.total --format=csv
 # Fail fast if the env is missing anything
 python -c "import torch, transformers, dotenv, jinja2, numpy, matplotlib; print('torch', torch.__version__, '| transformers', transformers.__version__, '| cuda', torch.cuda.is_available())" || exit 1
 
-# Override per job with --export=ALL,MODEL=...,MODEL_TAG=... (see submit_role_patching.sh). OLMo 3 needs transformers >= 4.57.
+# Override per job with --export=ALL,MODEL=...,MODEL_TAG=... (see submit_role_patching.sh).
 MODEL="${MODEL:-meta-llama/Meta-Llama-3-8B-Instruct}"
 MODEL_TAG="${MODEL_TAG:-llama3-8B-instruct}"
 INPUT_PATH="../code/outputs/questions/qwen3_thinking-4B/extracted/cochrane_review_data_final_with_questions.json"

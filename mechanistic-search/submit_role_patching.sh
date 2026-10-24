@@ -6,7 +6,7 @@
 
 MODELS=(   # "<hf name> <output tag>"
     "meta-llama/Meta-Llama-3-8B-Instruct llama3-8B-instruct"
-    "allenai/Olmo-3-7B-Instruct olmo3-7B-instruct"
+    "allenai/OLMo-2-1124-7B-Instruct olmo2-7B-instruct"
 )
 
 mkdir -p logs
