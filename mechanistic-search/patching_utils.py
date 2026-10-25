@@ -69,7 +69,8 @@ def get_hf_token() -> str | None:
     return None
 
 
-def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
+def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME, attn_implementation: str | None = None):
+    """attn_implementation: None for the transformers default (sdpa), "eager" to get attention weights back."""
     logging.basicConfig(level=logging.ERROR)
     access_token = get_hf_token()
 
@@ -78,8 +79,10 @@ def load_model_and_tokenizer(model_name: str = DEFAULT_MODEL_NAME):
 
     # bfloat16 needs compute capability 8.0+ (A100 and newer); older GPUs (V100, T4) only emulate it, so use float16
     use_bf16 = torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
+    extra_kwargs = {"attn_implementation": attn_implementation} if attn_implementation else {}
     model = AutoModelForCausalLM.from_pretrained(
         model_name, device_map="auto", dtype=torch.bfloat16 if use_bf16 else torch.float16, token=access_token,
+        **extra_kwargs,
     )
     model.eval()
 

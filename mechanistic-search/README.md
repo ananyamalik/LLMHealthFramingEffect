@@ -88,3 +88,21 @@ sbatch run_role_patching.sh full --roles enemy --generate_layers 8 16
 <yes_no|full>/<role>/summary.json    clean role effect and recovery per setup/layer (all / positive / negative)
 role_patching_<group>.png            per model: recovery by layer: rows = answer type, columns = setup, lines = roles
 ```
+
+## Attention during generation (`run_attention_capture.py`)
+
+What the model attends to while it writes the full answer, in run 1, run 2 and the patched run 2 (same prompts,
+pairs and setups as above; patched at `--layers`, default 0 10 20 30). Each generation step records the attention of
+the current token, averaged over heads, summed into prompt segments: `first_token`, `template`, `instructions`,
+`role` (run 1 only), `claim`, `articles`, plus `generated` (answer so far) and `comma_pos` (the comma setup's patch
+slot). Step 0 is the last prompt token, which predicts the first answer token. Needs eager attention, so answers can
+differ slightly from those in `pairs.jsonl`. Each pair is 10 generations, so pick a few reviews:
+
+```bash
+sbatch run_attention_capture.sh --roles doctor --framings negative --review_ids CD006827 CD007956
+sbatch run_attention_capture.sh --max_reviews 2 --per_head      # keep the head dimension
+```
+
+Outputs go to `outputs/<model_tag>/role_patching/attention/<role>/`: `attention.jsonl` (one line per pair and
+condition: answer, steps, file) and `attention/<pair>__<condition>.npz` (`segment_mass` [steps, layers, columns],
+`token_mass` [layers, prompt tokens] averaged over steps, `prompt_tokens`, `segment_ids`).
