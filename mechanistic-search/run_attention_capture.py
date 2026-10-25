@@ -197,7 +197,7 @@ def main(args):
                     patched = [(f"patched_{setup}_L{layer}", i, setup, layer)
                                for i, setup in enumerate(args.setups) for layer in args.layers]
                     if any((key, name) not in done for name, *_ in patched):
-                        with cache_residuals(model, [positions[s]["source"] for s in args.setups], layer_indices=args.layers) as cache:
+                        with torch.no_grad(), cache_residuals(model, [positions[s]["source"] for s in args.setups], layer_indices=args.layers) as cache:
                             model.model(input_ids=src[0], use_cache=False)
                         for name, i, setup, layer in patched:
                             patch = (layer, positions[setup]["target"], cache[layer][i])
