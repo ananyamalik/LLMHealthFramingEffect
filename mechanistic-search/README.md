@@ -106,3 +106,19 @@ sbatch run_attention_capture.sh --max_reviews 2 --per_head      # keep the head 
 Outputs go to `outputs/<model_tag>/role_patching/attention/<role>/`: `attention.jsonl` (one line per pair and
 condition: answer, steps, file) and `attention/<pair>__<condition>.npz` (`segment_mass` [steps, layers, columns],
 `token_mass` [layers, prompt tokens] averaged over steps, `prompt_tokens`, `segment_ids`).
+
+## KV ablation of the role (`run_kv_ablation.py`)
+
+On the clean run 1 (`My <role> said, <claim>`, default roles friend and enemy), hide the role from every later token
+(attention mask) or swap its keys/values for those of `My doctor said, <claim>` (`--source_role`), then generate the
+full answer. Conditions per pair: `run1`, `run2`, `source` (clean doctor run), `hide_word`, `hide_prefix`
+(`My <role> said,`), `replace_word` (the role word's KV) and `replace_said` (the KV of ` said,`, which have already read
+the role word). `--kv_layers 0 1 2 ...` replaces only some layers (default all). Hiding keeps every later token at its
+original position.
+
+```bash
+sbatch run_kv_ablation.sh --roles friend --max_reviews 5
+```
+
+Outputs: `outputs/<model_tag>/role_patching/kv_ablation/<role>/ablation.jsonl`, one line per (review, framing) with
+`<condition>_answer` for every condition.
