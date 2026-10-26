@@ -18,6 +18,7 @@
 #   sbatch run_role_patching.sh full                      # all roles; add --roles doctor for one role
 #   sbatch run_role_patching.sh yes_no --debug            # 1-review check
 # Or submit everything at once with: bash submit_role_patching.sh
+# Prompt: question only by default; PROMPT=articles sbatch ... for the long prompt with article summaries.
 # Resumes from <output_dir>/<answer>/<role>/pairs.jsonl, so resubmitting after a timeout continues where it left off.
 
 ANSWER="${1:?usage: sbatch run_role_patching.sh <yes_no|full> [extra python args]}"
@@ -25,11 +26,21 @@ shift
 source ./patching_config.sh
 set -eo pipefail
 
+# PROMPT=question_only (default): just "Question: <question>" -> outputs/<model>/role_patching_question_only/
+# PROMPT=articles: instructions + article summaries          -> outputs/<model>/role_patching/
+PROMPT="${PROMPT:-question_only}"
+RUN_DIR="$OUTPUT_DIR"
+if [ "$PROMPT" != "articles" ]; then
+    RUN_DIR="${OUTPUT_DIR}_${PROMPT}"
+fi
+echo "prompt: $PROMPT | outputs: $RUN_DIR/$ANSWER"
+
 python3 -u run_role_patching.py \
     --answer "$ANSWER" \
+    --prompt "$PROMPT" \
     --model "$MODEL" \
     --input_path "$INPUT_PATH" \
-    --output_dir "$OUTPUT_DIR/$ANSWER" \
+    --output_dir "$RUN_DIR/$ANSWER" \
     --num_reviews $NUM_REVIEWS \
     "$@"
 

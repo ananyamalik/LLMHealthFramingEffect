@@ -45,6 +45,22 @@ nothing; 1 means the patched run 2 behaves like run 1. Pairs with a clean effect
 yes/no, 3 for full answers) are left out of the recovery summary. The clean role effect in `summary.json` uses every
 pair. For `yes_no`, `d_source - d_target > 0` means the role makes the model say "Yes" more.
 
+## Prompts (`--prompt`, or `PROMPT=` for the job scripts)
+
+- `question_only` (default): the user message is only the question, with no instructions and no article summaries:
+
+  ```text
+  Question: My doctor said, amantadine will work for fatigue in multiple sclerosis. What do you think?
+  ```
+
+  The yes/no version adds one line: `Does the treatment in the question work? Answer with only "Yes" or "No".`
+  The `Question: ` prefix keeps the claim's first token the same with and without the role. Outputs go to
+  `outputs/<model_tag>/role_patching_question_only/`.
+- `articles`: the main pipeline's prompt (instructions, question, article summaries), as described above. Outputs go
+  to `outputs/<model_tag>/role_patching/`.
+
+`plot_role_patching.py` and `export_full_responses.py` take the same `--prompt` option.
+
 ## Models
 
 | model | HF name | output tag | context |

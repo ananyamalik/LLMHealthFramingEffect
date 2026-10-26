@@ -3,7 +3,7 @@ Plots the role-patching summaries, one figure per model: one row per answer type
 (last, comma), one line per role. Missing models / answer types / roles are skipped, so it can be run while jobs are
 still going.
 
-    python plot_role_patching.py [--model_tags llama3-8B-instruct olmo2-7B-instruct] [--group all|positive|negative]
+    python plot_role_patching.py [--prompt question_only|articles] [--model_tags ...] [--group all|positive|negative]
 """
 import argparse
 import json
@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from run_role_patching import ROLES, SETUPS, TEMPLATES
+from run_role_patching import ROLES, SETUPS, ANSWERS, PROMPTS
 
 SETUP_TITLES = {"last": "last token -> last token", "comma": "',' of 'My <role> said,' -> start of claim"}
 ANSWER_TITLES = {"yes_no": "Yes/No answer", "full": "Full answer"}
@@ -21,13 +21,13 @@ ANSWER_TITLES = {"yes_no": "Yes/No answer", "full": "Full answer"}
 
 def plot_model(model_tag: str, input_dir: str, group: str) -> None:
     summaries = {}
-    for answer in TEMPLATES:
+    for answer in ANSWERS:
         for role in ROLES:
             path = os.path.join(input_dir, answer, role, "summary.json")
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as f:
                     summaries[(answer, role)] = json.load(f)
-    answers = [a for a in TEMPLATES if any(k[0] == a for k in summaries)]
+    answers = [a for a in ANSWERS if any(k[0] == a for k in summaries)]
     if not answers:
         print(f"No summaries found in {input_dir}")
         return
@@ -69,7 +69,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot role-patching recovery by layer")
     parser.add_argument("--model_tags", nargs="+", default=["llama3-8B-instruct", "olmo2-7B-instruct"])
     parser.add_argument("--outputs_dir", default="./outputs", help="summaries are read from <outputs_dir>/<model_tag>/role_patching/.")
+    parser.add_argument("--prompt", default="question_only", choices=PROMPTS, help="which run to plot: question_only (role_patching_question_only/) or articles (role_patching/).")
     parser.add_argument("--group", default="all", choices=["all", "positive", "negative"])
     args = parser.parse_args()
+    run_dir = "role_patching" if args.prompt == "articles" else f"role_patching_{args.prompt}"
     for model_tag in args.model_tags:
-        plot_model(model_tag, os.path.join(args.outputs_dir, model_tag, "role_patching"), args.group)
+        plot_model(f"{model_tag} ({args.prompt})", os.path.join(args.outputs_dir, model_tag, run_dir), args.group)

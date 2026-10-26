@@ -9,15 +9,22 @@ For each role (doctor, friend, enemy) and framing:
     run 2 (target): "<claim>"
 The claim tokens and everything after them (articles, chat template) are identical in both runs (checked).
 
+Prompts (--prompt):
+    question_only (default): the user message is just "Question: <question>" (yes_no adds 'Does the treatment in the
+                  question work? Answer with only "Yes" or "No".'). No instructions, no article summaries.
+    articles:     the prompts below, with instructions and the review's article summaries.
+
 Setups (run 1's residual stream written into run 2 at one layer L, every layer, one setup at a time):
     last:  last prompt token of run 1  -> last prompt token of run 2
     comma: the "," of "My <role> said," in run 1 -> the token right before <claim> in run 2 (the start of the
            question, where the role would be)
 
 Answers (--answer):
-    yes_no: prompts/question_answering_yes_no.jinja2 (ends in 'Answer with only "Yes" or "No"').
+    yes_no: articles: prompts/question_answering_yes_no.jinja2 (ends in 'Answer with only "Yes" or "No"');
+            question_only: prompts/question_only_yes_no.jinja2.
             D(prompt) = log p(Yes) - log p(No) at the last prompt position.
-    full:   code/prompts/question_answering.jinja2 (the main pipeline's prompt). R1, R2 = greedy answers to run 1/run 2.
+    full:   articles: code/prompts/question_answering.jinja2 (the main pipeline's prompt); question_only:
+            prompts/question_only.jinja2. R1, R2 = greedy answers to run 1/run 2.
             D(prompt) = log p(R1 | prompt) - log p(R2 | prompt), teacher forced.
             Saved answers: run1_answer, run2_answer (clean), and patched_run2_answers[setup][layer], run 2's greedy
             answer with that patch, at --generate_layers (default every 10th layer).
@@ -48,11 +55,21 @@ ROLES = ["doctor", "friend", "enemy"]
 FRAMINGS = ["positive", "negative"]
 SETUPS = ["last", "comma"]
 CLAIM_ATTRIBUTION = "My doctor says "   # removed from the `doctor` question to get the bare claim
-QUESTION_MARKER = "**QUESTION**: "
-TEMPLATES = {   # template dirs are relative to code/, where render_prompt resolves them
+ANSWERS = ["yes_no", "full"]
+PROMPTS = ["question_only", "articles"]
+# Template dirs are relative to code/, where render_prompt resolves them.
+# articles: instructions + question + article summaries (the main pipeline's prompt)
+TEMPLATES = {
     "yes_no": ("question_answering_yes_no", "../mechanistic-search/prompts"),
     "full": ("question_answering", "./prompts"),
 }
+# question_only: "Question: <question>" and nothing else (yes_no adds the Yes/No instruction). The "Question: " prefix
+# keeps the claim's first token identical with and without the role (" incision" after "said," vs. at message start)
+QUESTION_ONLY_TEMPLATES = {
+    "yes_no": ("question_only_yes_no", "../mechanistic-search/prompts"),
+    "full": ("question_only", "../mechanistic-search/prompts"),
+}
+QUESTION_MARKERS = {"articles": "**QUESTION**: ", "question_only": "Question: "}
 DEFAULT_MIN_EFFECT = {"yes_no": 0.5, "full": 3.0}   # nats; pairs with a smaller |D(run 1) - D(run 2)| are not summarized
 YES_STRINGS, NO_STRINGS = ["Yes", "yes"], ["No", "no"]
 
@@ -71,9 +88,9 @@ def get_claims(example: dict) -> dict[str, str]:
     return claims
 
 
-def encode_prompt(tokenizer, answer: str, question: str, rct_inputs: list[dict], device):
+def encode_prompt(tokenizer, answer: str, question: str, rct_inputs: list[dict], device, prompt: str = "articles"):
     """Chat-template prompt ids [1, seq], the encoding with character offsets, and the character index of the question."""
-    template_name, template_dir = TEMPLATES[answer]
+    template_name, template_dir = (TEMPLATES if prompt == "articles" else QUESTION_ONLY_TEMPLATES)[answer]
     user_text = render_prompt(template_name, template_dir=template_dir, question=question, abstracts=rct_inputs)
     messages = [{"role": "user", "content": user_text}]
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -85,7 +102,8 @@ def encode_prompt(tokenizer, answer: str, question: str, rct_inputs: list[dict],
     if encoding["input_ids"] != reference_ids:
         raise ValueError("Offset tokenization does not match the chat-template ids")
 
-    question_start = text.index(QUESTION_MARKER + question) + len(QUESTION_MARKER)
+    marker = QUESTION_MARKERS[prompt]
+    question_start = text.index(marker + question) + len(marker)
     return torch.tensor([encoding["input_ids"]], device=device), encoding, question_start
 
 
@@ -260,12 +278,16 @@ def main(args):
                         continue
                     prefix = role_prefix(role)
                     src_question = f"{prefix} {claim}"
-                    src = encode_prompt(tokenizer, args.answer, src_question, rct_inputs, model.device)
-                    tgt = encode_prompt(tokenizer, args.answer, claim, rct_inputs, model.device)
+                    src = encode_prompt(tokenizer, args.answer, src_question, rct_inputs, model.device, args.prompt)
+                    tgt = encode_prompt(tokenizer, args.answer, claim, rct_inputs, model.device, args.prompt)
                     if src[0].shape[1] > max_prompt_len:
                         print(f"Skipping {key}: prompt too long ({src[0].shape[1]} tokens)")
                         continue
-                    positions = find_positions(tokenizer, src, tgt, prefix)
+                    try:
+                        positions = find_positions(tokenizer, src, tgt, prefix)
+                    except ValueError as e:   # e.g. the claim's first word tokenizes differently after "said,"
+                        print(f"Skipping {key}: {e}")
+                        continue
 
                     record = {
                         "pair_key": key,
@@ -273,6 +295,7 @@ def main(args):
                         "role": role,
                         "framing": framing,
                         "answer": args.answer,
+                        "prompt": args.prompt,
                         "source_question": src_question,
                         "target_question": claim,
                         "positions": positions,
@@ -297,7 +320,8 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Patch 'My <role> said, <claim>' into '<claim>' (last token and comma)")
-    parser.add_argument("--answer", required=True, choices=list(TEMPLATES), help="yes_no (single-token readout) or full (long-form answer).")
+    parser.add_argument("--answer", required=True, choices=ANSWERS, help="yes_no (single-token readout) or full (long-form answer).")
+    parser.add_argument("--prompt", default="question_only", choices=PROMPTS, help="question_only ('Question: <question>', no instructions or articles) or articles (the main pipeline's prompt with article summaries).")
     parser.add_argument("--roles", nargs="+", default=ROLES, help="roles to run (any word works in 'My <role> said,').")
     parser.add_argument("--model", default=DEFAULT_MODEL_NAME, help="HuggingFace model name.")
     parser.add_argument("--input_path", required=True, help="dataset with RCT inputs and framed questions (extracted question set).")

@@ -2,21 +2,23 @@
 Exports the full-answer role-patching responses to one CSV: one row per (model, role, review, framing), with the clean
 answers (run 1 with the role, run 2 bare claim) and run 2's patched answers at each saved setup/layer.
 
-    python export_full_responses.py [--model_tags llama3-8B-instruct olmo2-7B-instruct] [--output_path ...]
+    python export_full_responses.py [--prompt question_only|articles] [--model_tags ...] [--output_path ...]
 """
 import argparse
 import csv
 import json
 import os
 
-from run_role_patching import ROLES, SETUPS
+from run_role_patching import ROLES, SETUPS, PROMPTS
 
 
 def main(args):
+    run_dir = "role_patching" if args.prompt == "articles" else f"role_patching_{args.prompt}"
+    output_path = args.output_path or os.path.join(args.outputs_dir, f"{run_dir}_full_responses.csv")
     rows, patched_columns = [], []
     for model_tag in args.model_tags:
         for role in ROLES:
-            path = os.path.join(args.outputs_dir, model_tag, "role_patching", "full", role, "pairs.jsonl")
+            path = os.path.join(args.outputs_dir, model_tag, run_dir, "full", role, "pairs.jsonl")
             if not os.path.exists(path):
                 print(f"Missing {path}")
                 continue
@@ -45,16 +47,17 @@ def main(args):
 
     columns = ["model", "role", "review_id", "framing", "run1_question", "run2_question", "run1_answer", "run2_answer",
                "d_run1", "d_run2"] + patched_columns
-    with open(args.output_path, "w", encoding="utf-8", newline="") as f:
+    with open(output_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"Saved {len(rows)} rows to {args.output_path}")
+    print(f"Saved {len(rows)} rows to {output_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export full-answer role-patching responses to CSV")
     parser.add_argument("--model_tags", nargs="+", default=["llama3-8B-instruct", "olmo2-7B-instruct"])
     parser.add_argument("--outputs_dir", default="./outputs")
-    parser.add_argument("--output_path", default="./outputs/role_patching_full_responses.csv")
+    parser.add_argument("--prompt", default="question_only", choices=PROMPTS, help="question_only (role_patching_question_only/) or articles (role_patching/).")
+    parser.add_argument("--output_path", default=None, help="default: <outputs_dir>/<run dir>_full_responses.csv")
     main(parser.parse_args())
