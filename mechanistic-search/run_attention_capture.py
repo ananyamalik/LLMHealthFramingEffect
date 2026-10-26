@@ -1,6 +1,6 @@
 """
 Attention during generation for role patching: what the model attends to while it writes its full answer, in the
-clean runs and in the patched run 2. Same prompts, pairs and patching setups as run_role_patching.py (--answer full).
+clean runs and in the patched run 2. Same prompts (--prompt), pairs and patching setups as run_role_patching.py (--answer full).
 
 Conditions per pair:
     run1                    "My <role> said, <claim>", clean
@@ -15,10 +15,11 @@ need the eager implementation, so answers can differ slightly from the sdpa answ
 Every prompt token is assigned to one segment:
     first_token   position 0 (usually an attention sink)
     template      chat-template tokens outside the user message
-    instructions  the rest of the user message (task text, "**QUESTION**: ", "**ARTICLE SUMMARIES**: ")
+    instructions  the rest of the user message (articles: task text, "**QUESTION**: ", "**ARTICLE SUMMARIES**: ";
+                  question_only: "Question: ")
     role          "My <role> said," (run 1 only)
     claim         the claim
-    articles      the article summaries
+    articles      the article summaries (articles prompt only; empty for question_only)
 Two more columns: generated (answer tokens so far) and comma_pos, the comma setup's patch slot (run 1: the "," of
 "My <role> said,"; run 2: the token before the claim). comma_pos overlaps the other segments.
 
@@ -42,7 +43,9 @@ from patching_utils import (
     DEFAULT_MODEL_NAME, SEED, render_prompt, set_global_seed, load_model_and_tokenizer, get_context_length,
     get_stop_token_ids, format_rct_inputs, load_dataset, sample_reviews, cache_residuals,
 )
-from run_role_patching import ROLES, FRAMINGS, SETUPS, TEMPLATES, role_prefix, get_claims, encode_prompt, find_positions
+from run_role_patching import (
+    ROLES, FRAMINGS, SETUPS, PROMPTS, TEMPLATES, QUESTION_ONLY_TEMPLATES, role_prefix, get_claims, encode_prompt, find_positions,
+)
 
 ARTICLES_MARKER = "**ARTICLE SUMMARIES**: "
 SEGMENTS = ["first_token", "template", "instructions", "role", "claim", "articles"]
@@ -57,9 +60,9 @@ def char_span_to_tokens(encoding, start: int, end: int) -> tuple[int, int]:
 
 
 def segment_ids(tokenizer, question: str, claim: str, rct_inputs: list[dict], encoding, question_start: int,
-                prompt_len: int) -> np.ndarray:
+                prompt_len: int, prompt: str) -> np.ndarray:
     """Index into SEGMENTS for every prompt token. The prompt is built the same way as in encode_prompt."""
-    template_name, template_dir = TEMPLATES["full"]
+    template_name, template_dir = (TEMPLATES if prompt == "articles" else QUESTION_ONLY_TEMPLATES)["full"]
     user_text = render_prompt(template_name, template_dir=template_dir, question=question, abstracts=rct_inputs).strip()
     text = tokenizer.apply_chat_template([{"role": "user", "content": user_text}], tokenize=False, add_generation_prompt=True)
 
@@ -68,11 +71,13 @@ def segment_ids(tokenizer, question: str, claim: str, rct_inputs: list[dict], en
     claim_start = question_start + len(question) - len(claim)
     if text[claim_start:claim_start + len(claim)] != claim:
         raise ValueError("Claim not found at the expected position")
-    articles_start = text.index(ARTICLES_MARKER, question_start) + len(ARTICLES_MARKER)
 
     seg = np.full(prompt_len, SEGMENTS.index("template"), dtype=np.int64)
-    spans = [("instructions", user_start, user_end), ("articles", articles_start, user_end),
-             ("claim", claim_start, claim_start + len(claim))]
+    spans = [("instructions", user_start, user_end)]
+    if prompt == "articles":
+        articles_start = text.index(ARTICLES_MARKER, question_start) + len(ARTICLES_MARKER)
+        spans.append(("articles", articles_start, user_end))
+    spans.append(("claim", claim_start, claim_start + len(claim)))
     if claim_start > question_start:   # run 1: "My <role> said," (the space before the claim goes with the claim's first token)
         spans.append(("role", question_start, claim_start - 1))
     for name, start, end in spans:   # later spans overwrite earlier ones
@@ -182,14 +187,14 @@ def main(args):
                     key = f"{example['ReviewID']}_{framing}"
                     prefix = role_prefix(role)
                     src_question = f"{prefix} {claim}"
-                    src = encode_prompt(tokenizer, "full", src_question, rct_inputs, model.device)
-                    tgt = encode_prompt(tokenizer, "full", claim, rct_inputs, model.device)
+                    src = encode_prompt(tokenizer, "full", src_question, rct_inputs, model.device, args.prompt)
+                    tgt = encode_prompt(tokenizer, "full", claim, rct_inputs, model.device, args.prompt)
                     if src[0].shape[1] > max_prompt_len:
                         print(f"Skipping {key}: prompt too long ({src[0].shape[1]} tokens)")
                         continue
                     positions = find_positions(tokenizer, src, tgt, prefix)
-                    src_seg = segment_ids(tokenizer, src_question, claim, rct_inputs, src[1], src[2], src[0].shape[1])
-                    tgt_seg = segment_ids(tokenizer, claim, claim, rct_inputs, tgt[1], tgt[2], tgt[0].shape[1])
+                    src_seg = segment_ids(tokenizer, src_question, claim, rct_inputs, src[1], src[2], src[0].shape[1], args.prompt)
+                    tgt_seg = segment_ids(tokenizer, claim, claim, rct_inputs, tgt[1], tgt[2], tgt[0].shape[1], args.prompt)
 
                     # (condition, prompt ids, segments, comma slot, patch)
                     conditions = [("run1", src[0], src_seg, positions["comma"]["source"], None),
@@ -222,6 +227,7 @@ def main(args):
                             "review_id": example["ReviewID"],
                             "role": role,
                             "framing": framing,
+                            "prompt": args.prompt,
                             "condition": name,
                             "setup": patch and name.split("_")[1],
                             "layer": patch and patch[0],
@@ -241,6 +247,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Attention per generation step, clean and patched (role patching, full answers)")
+    parser.add_argument("--prompt", default="question_only", choices=PROMPTS, help="question_only ('Question: <question>', no instructions or articles) or articles (the main pipeline's prompt with article summaries).")
     parser.add_argument("--roles", nargs="+", default=ROLES, help="roles to run.")
     parser.add_argument("--framings", nargs="+", default=FRAMINGS, choices=FRAMINGS, help="framings to run.")
     parser.add_argument("--setups", nargs="+", default=SETUPS, choices=SETUPS, help="patching setups.")
