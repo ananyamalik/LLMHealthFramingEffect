@@ -29,6 +29,11 @@ Answers (--answer):
             Saved answers: run1_answer, run2_answer (clean), and patched_run2_answers[setup][layer], run 2's greedy
             answer with that patch, at --generate_layers (default every 10th layer).
 
+    --patch_generation (full only): also patch every response token, not just the prompt position. Run 1 reads the
+            same response tokens as run 2 (teacher forced for D; decoded in lockstep on run 2's tokens for the saved
+            answers), and its residual at each response token is written into run 2 at that token, at layer L.
+            At the last layers this makes run 2's logits equal run 1's, so recovery goes to 1 there by construction.
+
     recovery(setup, L) = (D(run 2, patched at L) - D(run 2)) / (D(run 1) - D(run 2))
         0 = the patch does nothing, 1 = the patched run 2 behaves like run 1.
 
@@ -48,7 +53,7 @@ from tqdm import tqdm
 from patching_utils import (
     DEFAULT_MODEL_NAME, SEED, render_prompt, set_global_seed, load_model_and_tokenizer, get_decoder_layers,
     get_context_length, format_rct_inputs, load_dataset, sample_reviews, cache_residuals, patch_residual,
-    greedy_generate, response_logprob, yes_no_logit_diff,
+    greedy_generate, patched_generate_every_token, response_logprob, yes_no_logit_diff,
 )
 
 ROLES = ["doctor", "friend", "enemy"]
@@ -162,6 +167,9 @@ def run_pair(model, tokenizer, args, src_ids, tgt_ids, positions: dict, layers: 
         record["identical_answers"] = torch.equal(src_resp, tgt_resp)
         record["d_source"], record["d_target"] = score(src_ids), score(tgt_ids)
 
+    if args.patch_generation:
+        return record | patch_every_token(model, tokenizer, args, src_ids, tgt_ids, positions, layers, src_resp, tgt_resp)
+
     src_positions = [positions[setup]["source"] for setup in SETUPS]
     with cache_residuals(model, src_positions, layer_indices=layers) as cache:
         model.model(input_ids=src_ids, use_cache=False)
@@ -182,6 +190,44 @@ def run_pair(model, tokenizer, args, src_ids, tgt_ids, positions: dict, layers: 
                     resp = greedy_generate(model, tokenizer, tgt_ids, args.max_new_tokens)
                 record["patched_run2_answers"][setup][str(layer_idx)] = tokenizer.decode(resp, skip_special_tokens=True).strip()
     del cache
+    return record
+
+
+@torch.no_grad()
+def patch_every_token(model, tokenizer, args, src_ids, tgt_ids, positions: dict, layers: list[int], src_resp, tgt_resp) -> dict:
+    """
+    --patch_generation (full only): the setup's prompt position is patched as usual, and so is every response token,
+    from run 1 at the same token (run 1 reads the same response tokens after its own prompt).
+        D: for each response R (R1, R2), run 1 + R is cached and patched into run 2 + R, teacher forced.
+        answers: run 1 is decoded in lockstep on run 2's patched greedy tokens (patched_generate_every_token).
+    """
+    src_len, tgt_len = src_ids.shape[1], tgt_ids.shape[1]
+    src_positions = [positions[setup]["source"] for setup in SETUPS]
+    caches = {}   # response name -> layer -> [len(SETUPS) + len(response), d_model]
+    for name, resp in [("run1", src_resp), ("run2", tgt_resp)]:
+        resp_positions = list(range(src_len, src_len + len(resp)))
+        with cache_residuals(model, src_positions + resp_positions, layer_indices=layers) as cache:
+            model.model(input_ids=torch.cat([src_ids, resp.unsqueeze(0)], dim=1), use_cache=False)
+        caches[name] = cache
+
+    record = {"d_patched": {}, "patched_run2_answers": {}}
+    for i, setup in enumerate(SETUPS):
+        record["d_patched"][setup] = {}
+        for layer_idx in layers:
+            logprobs = {}
+            for name, resp in [("run1", src_resp), ("run2", tgt_resp)]:
+                tgt_pos = [positions[setup]["target"]] + list(range(tgt_len, tgt_len + len(resp)))
+                values = torch.cat([caches[name][layer_idx][i:i + 1], caches[name][layer_idx][len(SETUPS):]])
+                with patch_residual(model, layer_idx, tgt_pos, values):
+                    logprobs[name] = response_logprob(model, tgt_ids, resp)
+            record["d_patched"][setup][str(layer_idx)] = logprobs["run1"] - logprobs["run2"]
+
+        record["patched_run2_answers"][setup] = {}
+        for layer_idx in args.generate_layers:
+            resp = patched_generate_every_token(model, tokenizer, src_ids, tgt_ids, layer_idx, [positions[setup]["source"]],
+                                                [positions[setup]["target"]], args.max_new_tokens)
+            record["patched_run2_answers"][setup][str(layer_idx)] = tokenizer.decode(resp, skip_special_tokens=True).strip()
+    del caches
     return record
 
 
@@ -299,6 +345,7 @@ def main(args):
                         "source_question": src_question,
                         "target_question": claim,
                         "positions": positions,
+                        "patch_generation": bool(args.patch_generation),
                     }
                     record |= run_pair(model, tokenizer, args, src[0], tgt[0], positions, layers, yes_no_ids)
                     out_file.write(json.dumps(record) + "\n")
@@ -330,10 +377,13 @@ if __name__ == "__main__":
     parser.add_argument("--layer_stride", default=1, type=int, help="patch every k-th layer starting at 0.")
     parser.add_argument("--max_new_tokens", default=512, type=int, help="full only: max tokens for greedy answers.")
     parser.add_argument("--generate_layers", nargs="*", type=int, default=None, help="full only: layers at which run 2's patched answer is generated and saved (default: every 10th layer; pass the flag with no values for none).")
+    parser.add_argument("--patch_generation", action=argparse.BooleanOptionalAction, help="full only: also patch every generated/response token from run 1 (decoded in lockstep on run 2's tokens), not just the prompt position.")
     parser.add_argument("--min_effect", default=None, type=float, help="pairs with |D(run 1) - D(run 2)| below this are left out of the summary (default 0.5 yes_no, 3 full).")
     parser.add_argument("--seed", default=SEED, type=int, help="seed for sampling reviews.")
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, help="only run 1 review.")
     args = parser.parse_args()
+    if args.patch_generation and args.answer != "full":
+        parser.error("--patch_generation needs --answer full (yes_no reads a single token, nothing is generated)")
 
     print("\nArguments:")
     for k, v in vars(args).items():

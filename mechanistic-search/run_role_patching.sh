@@ -19,6 +19,7 @@
 #   sbatch run_role_patching.sh yes_no --debug            # 1-review check
 # Or submit everything at once with: bash submit_role_patching.sh
 # Prompt: question only by default; PROMPT=articles sbatch ... for the long prompt with article summaries.
+# Patch every generated token too (full only): PATCH_GENERATION=1 sbatch run_role_patching.sh full
 # Resumes from <output_dir>/<answer>/<role>/pairs.jsonl, so resubmitting after a timeout continues where it left off.
 
 ANSWER="${1:?usage: sbatch run_role_patching.sh <yes_no|full> [extra python args]}"
@@ -33,7 +34,13 @@ RUN_DIR="$OUTPUT_DIR"
 if [ "$PROMPT" != "articles" ]; then
     RUN_DIR="${OUTPUT_DIR}_${PROMPT}"
 fi
-echo "prompt: $PROMPT | outputs: $RUN_DIR/$ANSWER"
+# PATCH_GENERATION=1 (full only): also patch every generated token -> outputs/<model>/role_patching_<prompt>_every_token/
+EXTRA_ARGS=()
+if [ -n "$PATCH_GENERATION" ]; then
+    RUN_DIR="${RUN_DIR}_every_token"
+    EXTRA_ARGS+=(--patch_generation)
+fi
+echo "prompt: $PROMPT | patch generation: ${PATCH_GENERATION:-no} | outputs: $RUN_DIR/$ANSWER"
 
 python3 -u run_role_patching.py \
     --answer "$ANSWER" \
@@ -42,6 +49,7 @@ python3 -u run_role_patching.py \
     --input_path "$INPUT_PATH" \
     --output_dir "$RUN_DIR/$ANSWER" \
     --num_reviews $NUM_REVIEWS \
+    "${EXTRA_ARGS[@]}" \
     "$@"
 
 conda deactivate

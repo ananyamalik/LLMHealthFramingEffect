@@ -211,6 +211,49 @@ def greedy_generate(model, tokenizer, input_ids: torch.Tensor, max_new_tokens: i
 
 
 @torch.no_grad()
+def patched_generate_every_token(model, tokenizer, src_ids: torch.Tensor, tgt_ids: torch.Tensor, layer_idx: int,
+                                 src_positions: list[int], tgt_positions: list[int], max_new_tokens: int) -> torch.Tensor:
+    """
+    Greedy decoding of the target prompt with the source run's residual stream written in at decoder layer `layer_idx`:
+    at `tgt_positions` of the prompt (from `src_positions`) and at every generated token. The source prompt is decoded
+    in lockstep on the target's generated tokens, so each new token's patch comes from the source run at that same token.
+    Returns new token ids [n] (including the stop token, like greedy_generate).
+    """
+    layer = get_decoder_layers(model)[layer_idx]
+    stop_ids = set(get_stop_token_ids(model, tokenizer))
+    state = {"mode": None, "positions": None, "values": None}
+
+    def hook(module, inputs, output):
+        hidden_states = output[0] if isinstance(output, tuple) else output
+        if state["mode"] == "record":
+            state["values"] = hidden_states[0, state["positions"], :].detach().clone()
+        elif state["mode"] == "patch":
+            hidden_states[0, state["positions"], :] = state["values"].to(device=hidden_states.device, dtype=hidden_states.dtype)
+        return output
+
+    def step(input_ids, past_key_values, mode, positions):
+        state["mode"], state["positions"] = mode, positions
+        return model.model(input_ids=input_ids, past_key_values=past_key_values, use_cache=True)
+
+    handle = layer.register_forward_hook(hook)
+    try:
+        src_out = step(src_ids, None, "record", src_positions)   # source first: its values are patched into the target
+        tgt_out = step(tgt_ids, None, "patch", tgt_positions)
+        new_ids = []
+        for _ in range(max_new_tokens):
+            next_id = int(model.lm_head(tgt_out.last_hidden_state[:, -1, :]).argmax(dim=-1))
+            new_ids.append(next_id)
+            if next_id in stop_ids:
+                break
+            token = torch.tensor([[next_id]], device=tgt_ids.device)
+            src_out = step(token, src_out.past_key_values, "record", [0])
+            tgt_out = step(token, tgt_out.past_key_values, "patch", [0])
+    finally:
+        handle.remove()
+    return torch.tensor(new_ids, device=tgt_ids.device)
+
+
+@torch.no_grad()
 def response_logprob(model, prompt_ids: torch.Tensor, response_ids: torch.Tensor) -> float:
     """Teacher-forced log p(response | prompt), summed over the response tokens."""
     prompt_len = prompt_ids.shape[1]
