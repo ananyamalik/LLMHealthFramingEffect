@@ -138,3 +138,61 @@ sbatch run_kv_ablation.sh --roles friend --max_reviews 5
 
 Outputs: `outputs/<model_tag>/role_patching/kv_ablation/<role>/ablation.jsonl`, one line per (review, framing) with
 `<condition>_answer` for every condition.
+
+## Belief probe (`run_belief_probe.py`)
+
+Before it writes the full answer (question-only prompt), does the residual stream already say whether the model thinks
+the treatment works? The label is the model's own answer to the same question in the yes/no prompt,
+`D = log p(Yes) - log p(No)` to *Does the treatment in the question work?* (> 0: it works, in either framing). Rows are
+every review x framing x role (`none`, i.e. the bare claim, plus `--roles`), all 368 reviews by default.
+
+The full prompt's residual is cached at every layer at anchors along the claim
+(`<intervention> will|won't work for <condition>. What do you think?`):
+
+| anchor | token | what is known there |
+|---|---|---|
+| `intervention` | last token of the treatment | the treatment (and the role), not the framing: both framings are identical up to here |
+| `verdict` | ` work` | the claim's direction, not the condition |
+| `claim_end` | `.` | the whole claim |
+| `question_end` | `?` | the question |
+| `last` | last prompt token | where the full answer starts |
+
+Probes are ridge regressions of D, per layer, with out-of-fold predictions (folds grouped by review, penalty by
+inner grouped CV): one per anchor, the `last` probe applied at the earlier anchors (`last_to_<anchor>`: is the
+answer's belief direction already there?), `last_bare` (trained without a role, tested on the roles), and the
+yes/no prompt's own last token as a reference (`yes_no`, `yes_no_to_last`).
+
+Framing alone predicts D well (every negative claim gets "No"), so the headline metric is `r_within`: the correlation
+after removing each (framing, role) cell's mean, i.e. ranking reviews within a framing and role. Prior vs posterior:
+`shift_r` correlates the predicted and actual change of D from the bare row to the role row (same review and framing,
+within framing). The null refits every probe on D shuffled across reviews within framing (`--permutations`, default
+50); `p_max` compares the best layer with the null's best layer.
+
+```bash
+sbatch run_belief_probe.sh                                   # Llama 3 8B, all reviews
+sbatch run_belief_probe.sh --num_reviews 15 --permutations 5 # quick check
+python run_belief_probe.py --analyze_only --output_dir outputs/<model_tag>/belief_probe   # re-run probes on CPU
+```
+
+Outputs go to `outputs/<model_tag>/belief_probe/`: `rows.jsonl` (question, D, top token, anchor positions and
+tokens), `activations.pt` (~0.8 GB per anchor for all reviews), `predictions.pt`, `summary.json` and
+`belief_probe.png`.
+
+## Belief trajectory (`run_belief_trajectory.py`)
+
+The belief probe read out at every token of the question-only prompt and of the generated full answer, at every
+layer, for 5 reviews x 2 framings x (bare + `--roles`). The probe (ridge of D per layer, on the anchors of
+`run_belief_probe.py` pooled) is trained on `outputs/<model_tag>/belief_probe/activations.pt` if that exists,
+otherwise on the anchors of 100 other reviews collected in the same job; the traced reviews are never in it. Each
+question also gets `d_after`: D when the yes/no question is asked as a follow-up turn after the model's own answer.
+
+```bash
+sbatch run_belief_trajectory.sh                       # Llama 3 8B, 5 reviews, 512-token answers
+sbatch run_belief_trajectory.sh --plot_layer 16
+```
+
+The probe is only trained on the anchor tokens, so its absolute level on other tokens (template, answer) is off
+distribution: compare conditions (framing, role) at the same token rather than reading the level itself. Outputs go to
+`outputs/<model_tag>/belief_trajectory/`: `probe.pt`, `trajectories.jsonl` (answer, `d_before`, `d_after`, token
+positions), `trajectories/<review>_<framing>_<role>.npz` (`score` and `norm` [layers, tokens], `tokens`) and
+`trajectory_<review>.png` (score at one layer over tokens, roles as lines; score per layer x token per question).
