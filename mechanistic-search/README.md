@@ -222,3 +222,23 @@ python get_diffmeans_directions.py --output_dir outputs/<model_tag>/diffmeans --
 
 Outputs go to `outputs/<model_tag>/diffmeans/`: `activations.pt`, and per anchor in `<anchor>/`: `directions.pt`
 (`directions[name]` [layers, d_model], train/test reviews), `summary.json` and `diffmeans.png`.
+
+## Steering the bare claim (`run_diffmeans_steering.py`)
+
+Adds the diffmeans `framing` and role (`doctor_minus_enemy`) directions to the bare claim's prompt (held-out reviews),
+alone and together, at one layer at a time, at the last token or at every question token, and compares with the real
+`My <role> said,` prompts: does the framing push move the answer like switching will/won't, does the role push change
+how much framing matters (does `-role` reverse it like `enemy`), and does the role push change what the framing push
+does. `--answer yes_no`: D at the yes/no prompt (directions from `yes_no`). `--answer full`: the model writes its
+answer to `Question: <claim>` with the steering, then D is read from a yes/no follow-up turn without steering
+(directions from `last`); answers are saved. Full answers are a generation per condition, so their default grid is
+smaller (alphas +-1, layers 8 16 24, 20 reviews, 256 tokens).
+
+```bash
+bash submit_diffmeans_steering.sh                   # both models: yes_no, full/last, full/question (6 jobs)
+bash submit_diffmeans_steering.sh --num_reviews 2   # quick check of every job
+```
+
+The submit script builds a model's directions first (one job) if they do not exist, and the steering jobs wait for it.
+Outputs go to `outputs/<model_tag>/diffmeans_steering/<yes_no|full>/<last|question>/`: `pairs.jsonl`, `summary.json`,
+`steering.png`.
