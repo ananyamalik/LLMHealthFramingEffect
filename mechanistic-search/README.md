@@ -196,3 +196,29 @@ distribution: compare conditions (framing, role) at the same token rather than r
 `outputs/<model_tag>/belief_trajectory/`: `probe.pt`, `trajectories.jsonl` (answer, `d_before`, `d_after`, token
 positions), `trajectories/<review>_<framing>_<role>.npz` (`score` and `norm` [layers, tokens], `tokens`) and
 `trajectory_<review>.png` (score at one layer over tokens, roles as lines; score per layer x token per question).
+
+## Framing and role directions (`get_diffmeans_directions.py`)
+
+Difference-of-means directions per layer, at every anchor of the belief probe (and the yes/no prompt's last token).
+The job runs from scratch: it collects the activations itself (all reviews x both framings x bare claim + roles, as in
+`run_belief_probe.py`) into `outputs/<model_tag>/diffmeans/activations.pt`, and later runs reuse that file. All
+directions are averages of (framing x role) cell means over the training reviews, so neither axis leaks into the other:
+
+- `framing`: positive - negative, averaged over roles (also `framing_<role>` per role)
+- `<role>_vs_none` (r_k): role - bare claim, averaged over framings. This mixes the role with the longer prompt
+- `shared` = mean_k r_k: what all roles share vs the bare claim (length, the `My _ said,` template, generic persona)
+- `<role>_specific` = r_k - shared, and `<a>_minus_<b>`: only role rows (all the same length), so length cancels
+
+`shared_share` = |shared|² / mean_k |r_k|² is the part of role-vs-none common to all roles. `summary.json` also has
+the cosines between framing and every role direction, and held-out AUCs of each projection for its own contrast and
+for the other axis' (leak check).
+
+```bash
+bash submit_diffmeans.sh                            # both models, one GPU job each (in parallel)
+sbatch get_diffmeans_directions.sh                  # one model (Llama 3 8B by default): collects activations, then fits
+sbatch get_diffmeans_directions.sh --num_reviews 15 # quick check
+python get_diffmeans_directions.py --output_dir outputs/<model_tag>/diffmeans --anchors last   # refit on CPU
+```
+
+Outputs go to `outputs/<model_tag>/diffmeans/`: `activations.pt`, and per anchor in `<anchor>/`: `directions.pt`
+(`directions[name]` [layers, d_model], train/test reviews), `summary.json` and `diffmeans.png`.
