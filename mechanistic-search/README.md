@@ -244,3 +244,23 @@ bash submit_diffmeans_steering.sh --num_reviews 2   # quick check of every job
 The submit script builds a model's directions first (one job) if they do not exist, and the steering jobs wait for it.
 Outputs go to `outputs/<model_tag>/diffmeans_steering/<yes_no|full>/<last|question>/`: `pairs.jsonl`, `summary.json`,
 `steering.png`.
+
+## Unit-vector steering at the last token (`run_unit_steering.py`)
+
+Self-contained. Extracts, at the last prompt token of `Question: <claim>` (training reviews):
+`framing` = mean of [positive none] − [negative none]; `<role>` = mean of ½([pos role] − [pos none] + [neg role] −
+[neg none]) for doctor, friend, enemy; `role` = the mean of the three. Each is normalized to unit length (v) and added
+as α · scale · v at the last prompt token, one layer at a time (every 4th), and the model writes its answer
+(test reviews). `--scale residual`: scale = mean residual norm (α 0.1 0.25 0.5); `proj_std`: scale = std of the
+residuals projected on v (α 2 4 8); `unit`: scale = 1 (α 0.5 1 2). Experiments:
+`framing_flip` (positive claim − framing, negative claim + framing), `role_add` (bare claim + doctor / friend / enemy)
+and `interaction` (neutral "Does X work for Y? What do you think?" + role, ± framing, ± framing + role).
+
+```bash
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_unit_steering.sh
+```
+
+Outputs in `outputs/<model_tag>/unit_steering/`: `directions.pt` (raw and unit vectors, norms, scales), and per scale
+`<scale>/vectors.pt` (the vectors as added), `<scale>/answers.jsonl` and `<scale>/answers.csv` (each steered answer
+next to the unsteered one and the matching real answer) and `<scale>/logprobs.jsonl` (the log-probability of every
+generated token of every answer, with the 5 most likely tokens at each step).
