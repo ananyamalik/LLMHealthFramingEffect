@@ -14,7 +14,10 @@ get_diffmeans_directions.py (the directions never saw them), both framings. --an
 Directions (<diffmeans_dir>/<anchor>/directions.pt; default anchor: the last token of the same prompt, i.e. yes_no
 for yes_no and last for full):
     framing   positive - negative claim, averaged over roles
-    role      doctor_minus_enemy (the main role axis): + pushes toward "my doctor said", - toward "my enemy said"
+    role      --role_direction:
+              shared               (default) mean over doctor/friend/enemy of (My <role> said, - no role):
+                                   + pushes toward "someone said it", - away from it
+              doctor_minus_enemy   the main axis between roles: + toward "my doctor said", - toward "my enemy said"
     random_*  a fixed random direction per layer with the norm of framing / role (controls)
 alpha = 1 adds the full average difference (e.g. negative claim + 1 x framing ~ the positive claim's state).
 
@@ -32,7 +35,7 @@ Conditions per test (review, framing) and layer:
     random_framing|a, random_role|a                        controls
 Reference: the clean D of the real role prompts ("My doctor/friend/enemy said, <claim>") of the same reviews.
 
-Outputs (in --output_dir/<answer>/<positions>/):
+Outputs (in --output_dir/<answer>/<positions>[_gen][_role-shared]/; no suffix = doctor_minus_enemy, as the first runs):
     pairs.jsonl     one line per test (review, framing): clean D, real-role D, steered D per condition and layer
                     (full: also answers, clean_answer, role_answers[role], steered_answers[condition][layer]);
                     resumable
@@ -71,6 +74,8 @@ DEFAULTS = {
 }
 
 POSITIONS = ["last", "question"]
+# role direction -> what its + and - ends push toward (plot labels)
+ROLE_DIRECTIONS = {"shared": ("has a role", "no role"), "doctor_minus_enemy": ("doctor", "enemy")}
 INK, INK_2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 ROLE_COLORS = {"none": "#8f8e89", "doctor": "#2a78d6", "friend": "#eb6834", "enemy": "#1baf7a"}
 
@@ -116,8 +121,8 @@ def conditions(args) -> list[tuple[str, float, float]]:
     return conds
 
 
-def steering_vectors(directions: dict, seed: int) -> dict[str, torch.Tensor]:
-    framing, role = directions["framing"], directions["doctor_minus_enemy"]
+def steering_vectors(directions: dict, role_direction: str, seed: int) -> dict[str, torch.Tensor]:
+    framing, role = directions["framing"], directions[role_direction]
     generator = torch.Generator().manual_seed(seed)
     out = {"framing": framing, "role": role}
     for name, v in [("random_framing", framing), ("random_role", role)]:
@@ -174,7 +179,8 @@ def summarize(records: list[dict], args, layers: list[int]) -> dict:
     real = {"none": effect_clean} | {role: mean([p["d_roles"][role] - n["d_roles"][role] for p, n in zip(pos, neg)])
                                     for role in ROLES}
     real_d = {"none": mean([r["d_clean"] for r in pos + neg])} | {role: mean([r["d_roles"][role] for r in pos + neg]) for role in ROLES}
-    summary = {"n_reviews": len(pairs), "positions": args.positions, "anchor": args.anchor, "layers": layers,
+    summary = {"n_reviews": len(pairs), "positions": args.positions, "anchor": args.anchor, "role_direction": args.role_direction,
+               "layers": layers,
                "real_framing_effect": real, "real_mean_d": real_d,
                "framing_recovery": {}, "framing_effect_under_role": {}, "mean_d_under_role": {},
                "framing_steer_effect_under_role": {}, "random_abs_shift": {}}
@@ -222,6 +228,7 @@ def style(ax):
 
 def plot(summary: dict, title: str, path: str) -> None:
     layers = summary["layers"]
+    plus, minus = ROLE_DIRECTIONS[summary.get("role_direction", "doctor_minus_enemy")]
     fig, axes = plt.subplots(2, 2, figsize=(13, 9.5))
 
     ax = axes[0, 0]
@@ -243,7 +250,7 @@ def plot(summary: dict, title: str, path: str) -> None:
     for a, values in summary["framing_effect_under_role"].items():
         a = float(a)
         ax.plot(layers, values, marker="o", ms=4, color=ROLE_COLORS["doctor" if a > 0 else "enemy"], **strength(a),
-                label=f"{a:+g} × role ({'toward doctor' if a > 0 else 'toward enemy'})")
+                label=f"{a:+g} × role (toward {plus if a > 0 else minus})")
     real_lines(ax, summary["real_framing_effect"])
     ax.axhline(0, color=INK_2, lw=0.8)
     ax.set(xlabel="layer steered", ylabel="framing effect  D(will) − D(won't)")
@@ -256,7 +263,7 @@ def plot(summary: dict, title: str, path: str) -> None:
         ar = float(ar)
         color = ROLE_COLORS["none"] if ar == 0 else ROLE_COLORS["doctor" if ar > 0 else "enemy"]
         ax.plot(layers, values, lw=2, marker="o", ms=4, color=color,
-                label="framing push alone" if ar == 0 else f"framing push + {ar:+g} × role ({'doctor' if ar > 0 else 'enemy'}-ward)")
+                label="framing push alone" if ar == 0 else f"framing push + {ar:+g} × role (toward {plus if ar > 0 else minus})")
     ax.axhline(0, color=INK_2, lw=0.8)
     ax.set(xlabel="layer steered (both vectors at the same layer)", ylabel="change in D per 1 × framing")
     ax.set_title("Both together: does the role push change what\nthe framing push does?", fontsize=10, loc="left")
@@ -288,7 +295,7 @@ def main(args):
     if fit.get("model") and fit["model"] != args.model:
         raise ValueError(f"directions were fit on {fit['model']}, not {args.model}")
     test_reviews = set(fit["test_reviews"])
-    vectors = steering_vectors(fit["directions"], args.seed)
+    vectors = steering_vectors(fit["directions"], args.role_direction, args.seed)
     dataset = [e for e in load_dataset(args.input_path) if e["ReviewID"] in test_reviews]
     if args.num_reviews > 0:
         dataset = dataset[:args.num_reviews]
@@ -301,7 +308,8 @@ def main(args):
     conds = conditions(args)
     print(f"Layers: {layers} | {len(conds)} conditions -> {len(conds) * len(layers)} steered passes per question")
 
-    out_dir = os.path.join(args.output_dir, args.answer, args.positions + ("_gen" if args.steer_generation else ""))
+    out_dir = os.path.join(args.output_dir, args.answer, args.positions + ("_gen" if args.steer_generation else "")
+                           + ("" if args.role_direction == "doctor_minus_enemy" else f"_role-{args.role_direction}"))
     os.makedirs(out_dir, exist_ok=True)
     pairs_path = os.path.join(out_dir, "pairs.jsonl")
     done = set()
@@ -348,7 +356,7 @@ def main(args):
     for cond, v in summary.get("answer_unchanged", {}).items():
         print(f"answer unchanged, {cond:<20} " + " ".join(f"L{l} {x:.0%}" for l, x in zip(layers, v)))
     scored = "D = yes/no answer" if args.answer == "yes_no" else "D = yes/no follow-up after the written answer"
-    added_at = args.positions + (" + every generated token" if args.steer_generation else "")
+    added_at = f"{args.positions}, role = {args.role_direction}" + (" + every generated token" if args.steer_generation else "")
     plot(summary, f"{args.model} | steering the bare claim ({args.answer}; {scored}) | vectors from '{args.anchor}', added at: {added_at}",
          os.path.join(out_dir, "steering.png"))
 
@@ -363,6 +371,8 @@ if __name__ == "__main__":
     parser.add_argument("--anchor", default=None, help="which anchor's directions to steer with (default: yes_no for yes_no, last for full).")
     parser.add_argument("--max_new_tokens", default=256, type=int, help="full only: max tokens of each written answer.")
     parser.add_argument("--positions", default="last", choices=POSITIONS, help="last prompt token only, or every token of the question.")
+    parser.add_argument("--role_direction", default="shared", choices=list(ROLE_DIRECTIONS),
+                        help="shared: mean of (My <role> said, - no role) over roles; doctor_minus_enemy: the earlier runs.")
     parser.add_argument("--steer_generation", action="store_true", help="full only: also add the vector at every generated token (outputs in <positions>_gen/).")
     parser.add_argument("--layers", nargs="*", type=int, default=None, help="layers to steer (default yes_no: every --layer_stride and the last; full: 8 16 24).")
     parser.add_argument("--layer_stride", default=4, type=int)
