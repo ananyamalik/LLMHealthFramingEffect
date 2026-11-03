@@ -264,3 +264,23 @@ Outputs in `outputs/<model_tag>/unit_steering/`: `directions.pt` (raw and unit v
 `<scale>/vectors.pt` (the vectors as added), `<scale>/answers.jsonl` and `<scale>/answers.csv` (each steered answer
 next to the unsteered one and the matching real answer) and `<scale>/logprobs.jsonl` (the log-probability of every
 generated token of every answer, with the 5 most likely tokens at each step).
+
+## Framing → role mediation and role × framing patching (`run_framing_role_mediation.py`)
+
+Yes/no prompt (`question_only_yes_no`); score D = log p(Yes) − log p(No) at the last prompt token. Vectors are fit as
+in `run_unit_steering.py` (last prompt token, training reviews), on this prompt.
+
+- `--experiment steer`: −α × framing at the last prompt token at one layer L, on every test review's positive /
+  negative claim (no role and "My doctor/friend/enemy said,") and the neutral sentence.
+  - `projection.csv`: how much the projection on each role vector changes at every later layer (and the part the
+    added vector puts there directly).
+  - `mediation.csv` / `deference.csv`: the same push with the role direction blocked after L (`clamp`: held at its
+    unsteered value; `ablate`: set to 0), and a random direction as a control. `*_remaining` = effect with the block ÷
+    without (~1: does not go through it; ~0: it does). `deference.csv` uses the role effect D(role) − D(no role).
+- `--experiment patch`: "My doctor said," activations written into "My friend said," (`--source_role`,
+  `--target_role`) one position × layer at a time, under each framing. `summary.csv` / `patching.png`: recovery per
+  framing and the share of the real role × framing interaction each position/layer carries.
+
+```bash
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_framing_role_mediation.sh
+```

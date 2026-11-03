@@ -76,9 +76,9 @@ def neutral_sentence(positive_claim: str) -> str:
     return f"Does {treatment} work for {condition}? What do you think?"
 
 
-def prompt_ids(tokenizer, claim: str, role: str, device) -> torch.Tensor:
+def prompt_ids(tokenizer, claim: str, role: str, device, answer: str = "full") -> torch.Tensor:
     question = claim if role == NO_ROLE else f"{role_prefix(role)} {claim}"
-    return encode_prompt(tokenizer, "full", question, [], device, "question_only")[0]
+    return encode_prompt(tokenizer, answer, question, [], device, "question_only")[0]
 
 
 @torch.no_grad()
@@ -88,14 +88,14 @@ def last_token_states(model, ids: torch.Tensor) -> torch.Tensor:
     return torch.stack([h[0, -1] for h in hidden]).float().cpu()
 
 
-def fit_directions(model, tokenizer, dataset: list[dict], args) -> dict:
+def fit_directions(model, tokenizer, dataset: list[dict], args, answer: str = "full") -> dict:
     """Raw and unit diffmeans vectors {name: [layers, d_model]} (framing, each role, their mean), their norms, the mean residual norm at the last token
     [layers] and the std of the residuals projected on each unit vector {name: [layers]}."""
     diffs = {name: [] for name in VECTORS}
     all_states = []
     for example in tqdm(dataset, desc="extracting"):
         claims = get_claims(example)
-        states = {(framing, role): last_token_states(model, prompt_ids(tokenizer, claims[framing], role, model.device))
+        states = {(framing, role): last_token_states(model, prompt_ids(tokenizer, claims[framing], role, model.device, answer))
                   for framing in FRAMINGS for role in [NO_ROLE] + ROLES}
         diffs["framing"].append(states["positive", NO_ROLE] - states["negative", NO_ROLE])
         for role in ROLES:
