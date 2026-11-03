@@ -232,7 +232,9 @@ how much framing matters (does `-role` reverse it like `enemy`), and does the ro
 does. `--answer yes_no`: D at the yes/no prompt (directions from `yes_no`). `--answer full`: the model writes its
 answer to `Question: <claim>` with the steering, then D is read from a yes/no follow-up turn without steering
 (directions from `last`); answers are saved. Full answers are a generation per condition, so their default grid is
-smaller (alphas +-1, layers 8 16 24, 20 reviews, 256 tokens).
+smaller (alphas +-1, layers 8 16 24, 20 reviews, 256 tokens). `--steer_generation` (full) also adds the vector at
+every generated token, so the push lasts the whole answer (outputs in `<last|question>_gen/`); `summary.json` then has
+`answer_unchanged`, the fraction of steered answers identical to the unsteered one.
 
 ```bash
 bash submit_diffmeans_steering.sh                   # both models: yes_no, full/last, full/question (6 jobs)

@@ -22,6 +22,7 @@ Each vector is added to the residual stream (decoder layer output) at one layer,
     last      the last prompt token only (where the answer starts)
     question  every token from the start of the question to the end of the prompt
 The vector is added only while the prompt is read; generated tokens see it through the cached keys/values.
+With --steer_generation (full), it is also added at every generated token, so the push lasts the whole answer.
 
 Conditions per test (review, framing) and layer:
     framing|a        alpha * framing                       does framing steering move the answer like the real claim?
@@ -76,7 +77,7 @@ ROLE_COLORS = {"none": "#8f8e89", "doctor": "#2a78d6", "friend": "#eb6834", "ene
 
 def strength(a: float) -> dict:
     """Line style by |alpha|: thicker and darker for a bigger push."""
-    return {"lw": {0.5: 1.2, 1.0: 2.0}.get(abs(a), 3.0), "alpha": {0.5: 0.55, 1.0: 0.8}.get(abs(a), 1.0)}
+    return {"lw": {0.5: 1.2, 1.0: 2.0, 2.0: 3.0}.get(abs(a), 4.0), "alpha": {0.5: 0.55, 1.0: 0.8}.get(abs(a), 1.0)}
 
 
 def real_lines(ax, values: dict) -> None:
@@ -86,12 +87,16 @@ def real_lines(ax, values: dict) -> None:
 
 
 @contextmanager
-def add_at_positions(model, layer_idx: int, positions: list[int], vector: torch.Tensor):
-    """Adds `vector` to the output of decoder layer `layer_idx` at `positions`."""
+def add_at_positions(model, layer_idx: int, positions: list[int], vector: torch.Tensor, during_generation: bool = False):
+    """Adds `vector` to the output of decoder layer `layer_idx` at `positions` (and at every generated token if
+    `during_generation`)."""
     def hook(module, inputs, output):
         hidden_states = output[0] if isinstance(output, tuple) else output
-        if hidden_states.shape[1] > max(positions):   # the prompt pass, not a decode step
-            hidden_states[0, positions, :] += vector.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        vec = vector.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        if hidden_states.shape[1] > max(positions):   # the prompt pass
+            hidden_states[0, positions, :] += vec
+        elif during_generation:                       # a decode step: the newest token
+            hidden_states[0, -1, :] += vec
         return output
 
     handle = get_decoder_layers(model)[layer_idx].register_forward_hook(hook)
@@ -144,7 +149,8 @@ def run_pair(model, tokenizer, claim: str, ids: torch.Tensor, positions: list[in
         steered[name], answers[name] = {}, {}
         for l in layers:
             vector = af * f_vec[l] + ar * r_vec[l]
-            d, answer = score(model, tokenizer, claim, ids, args, yes_no_ids, add_at_positions(model, l, positions, vector))
+            steer = add_at_positions(model, l, positions, vector, args.steer_generation)
+            d, answer = score(model, tokenizer, claim, ids, args, yes_no_ids, steer)
             steered[name][str(l)] = d
             answers[name][str(l)] = answer
     return {"d_steered": steered} | ({"steered_answers": answers} if args.answer == "full" else {})
@@ -198,6 +204,11 @@ def summarize(records: list[dict], args, layers: list[int]) -> dict:
     for kind in ["random_framing", "random_role"]:
         summary["random_abs_shift"][kind] = {str(a): [mean([abs(d(r, f"{kind}|{a}", l) - r["d_clean"]) for r in pos + neg])
                                                      for l in layers] for a in args.random_alphas}
+
+    # Full answers: the fraction of steered answers word-for-word the same as the unsteered one
+    if args.answer == "full":
+        summary["answer_unchanged"] = {cond: [mean([r["steered_answers"][cond][str(l)] == r["clean_answer"] for r in pos + neg])
+                                              for l in layers] for cond in pos[0]["steered_answers"]} if pos else {}
     return summary
 
 
@@ -290,7 +301,7 @@ def main(args):
     conds = conditions(args)
     print(f"Layers: {layers} | {len(conds)} conditions -> {len(conds) * len(layers)} steered passes per question")
 
-    out_dir = os.path.join(args.output_dir, args.answer, args.positions)
+    out_dir = os.path.join(args.output_dir, args.answer, args.positions + ("_gen" if args.steer_generation else ""))
     os.makedirs(out_dir, exist_ok=True)
     pairs_path = os.path.join(out_dir, "pairs.jsonl")
     done = set()
@@ -334,8 +345,11 @@ def main(args):
         print(f"framing recovery, {a:>5} x framing: " + " ".join(f"L{l} {x:+.2f}" for l, x in zip(layers, v)))
     for a, v in summary["framing_effect_under_role"].items():
         print(f"framing effect,   {a:>5} x role:    " + " ".join(f"L{l} {x:+.2f}" for l, x in zip(layers, v)))
+    for cond, v in summary.get("answer_unchanged", {}).items():
+        print(f"answer unchanged, {cond:<20} " + " ".join(f"L{l} {x:.0%}" for l, x in zip(layers, v)))
     scored = "D = yes/no answer" if args.answer == "yes_no" else "D = yes/no follow-up after the written answer"
-    plot(summary, f"{args.model} | steering the bare claim ({args.answer}; {scored}) | vectors from '{args.anchor}', added at: {args.positions}",
+    added_at = args.positions + (" + every generated token" if args.steer_generation else "")
+    plot(summary, f"{args.model} | steering the bare claim ({args.answer}; {scored}) | vectors from '{args.anchor}', added at: {added_at}",
          os.path.join(out_dir, "steering.png"))
 
 
@@ -349,6 +363,7 @@ if __name__ == "__main__":
     parser.add_argument("--anchor", default=None, help="which anchor's directions to steer with (default: yes_no for yes_no, last for full).")
     parser.add_argument("--max_new_tokens", default=256, type=int, help="full only: max tokens of each written answer.")
     parser.add_argument("--positions", default="last", choices=POSITIONS, help="last prompt token only, or every token of the question.")
+    parser.add_argument("--steer_generation", action="store_true", help="full only: also add the vector at every generated token (outputs in <positions>_gen/).")
     parser.add_argument("--layers", nargs="*", type=int, default=None, help="layers to steer (default yes_no: every --layer_stride and the last; full: 8 16 24).")
     parser.add_argument("--layer_stride", default=4, type=int)
     parser.add_argument("--framing_alphas", nargs="+", type=float, default=None, help="default yes_no: -2 -1 -0.5 0.5 1 2; full: -1 1.")
