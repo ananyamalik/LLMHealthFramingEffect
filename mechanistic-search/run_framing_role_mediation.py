@@ -94,14 +94,18 @@ def yes_no_d(model, hidden: torch.Tensor, yes_no_ids) -> list[float]:
 
 
 @contextmanager
-def intervene(model, add: dict, block: dict, capture: dict | None = None):
+def intervene(model, add: dict, block: dict, capture: dict | None = None, prompt_len: int | None = None):
     """Per batch row, at the last prompt token of decoder layer l's output: adds add[l] [rows, d_model], then sets the
     projection on the unit vector block[l][0] [rows, d_model] to block[l][1] [rows] (rows with a zero vector are left
     as they are). With `capture`, stores every layer's last-token output after that in capture[l] (the same place the
-    edits are made; hidden_states[-1] would be after the final norm)."""
+    edits are made; hidden_states[-1] would be after the final norm). With `prompt_len` (generation), only the prompt
+    pass is edited; the generated tokens see the edit through the cached keys/values."""
     def make_hook(l):
         def hook(module, inputs, output):
-            h = (output[0] if isinstance(output, tuple) else output)[:, -1, :]
+            hidden = output[0] if isinstance(output, tuple) else output
+            if prompt_len is not None and hidden.shape[1] != prompt_len:
+                return output
+            h = hidden[:, -1, :]
             if l in add:
                 h += add[l].to(device=h.device, dtype=h.dtype)
             if l in block:
@@ -123,6 +127,18 @@ def intervene(model, add: dict, block: dict, capture: dict | None = None):
             handle.remove()
 
 
+def stack_rows(batch: list[tuple], d_model: int) -> tuple[dict, dict]:
+    """Per-row (add, block) dicts -> the [rows, ...] tensors `intervene` takes (zeros for rows without an edit)."""
+    add, block = {}, {}
+    for i, (row_add, row_block) in enumerate(batch):
+        for l, v in row_add.items():
+            add.setdefault(l, torch.zeros(len(batch), d_model))[i] = v
+        for l, (u, target) in row_block.items():
+            block.setdefault(l, (torch.zeros(len(batch), d_model), torch.zeros(len(batch))))
+            block[l][0][i], block[l][1][i] = u, target
+    return add, block
+
+
 @torch.no_grad()
 def run_rows(model, ids: torch.Tensor, rows: list[tuple], yes_no_ids, args, want_states: bool = False):
     """rows: (add {layer: vector}, block {layer: (unit vector, target projection)}), one forward pass each (batched).
@@ -131,13 +147,7 @@ def run_rows(model, ids: torch.Tensor, rows: list[tuple], yes_no_ids, args, want
     ds, states = [], []
     for start in range(0, len(rows), args.batch_size):
         batch = rows[start:start + args.batch_size]
-        add, block = {}, {}
-        for i, (row_add, row_block) in enumerate(batch):
-            for l, v in row_add.items():
-                add.setdefault(l, torch.zeros(len(batch), d_model))[i] = v
-            for l, (u, target) in row_block.items():
-                block.setdefault(l, (torch.zeros(len(batch), d_model), torch.zeros(len(batch))))
-                block[l][0][i], block[l][1][i] = u, target
+        add, block = stack_rows(batch, d_model)
         capture = {} if want_states else None
         with intervene(model, add, block, capture):
             out = model.model(input_ids=ids.repeat(len(batch), 1), use_cache=False)

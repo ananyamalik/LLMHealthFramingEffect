@@ -284,3 +284,16 @@ in `run_unit_steering.py` (last prompt token, training reviews), on this prompt.
 ```bash
 sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_framing_role_mediation.sh
 ```
+
+### Full written answers for the same conditions (`run_framing_role_full_answers.py`)
+
+Open prompt ("Question: <claim>", greedy, 256 tokens), vectors fit on this prompt (`directions_full.pt`). Edits on the
+prompt pass only. `full_<scale>/steer_answers.csv`: per prompt, unsteered / −0.25 × framing push / push + role clamped /
+push + role ablated / role ablated alone / push + random clamped, at layers 16 20 24. `full_patch_doctor_to_friend/
+patch_answers.csv`: the friend prompt's answer with doctor activations patched in at `--gen_patches` (default role@0 4 8,
+said@4 8, claim@8 12, last@16 20 24, all@16), next to the doctor and friend answers. Token log-probabilities in the
+`*_logprobs.jsonl` files.
+
+```bash
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_framing_role_full_answers.sh
+```
