@@ -1,6 +1,7 @@
 #!/bin/bash
-# Submits the diffmeans steering jobs for both models, one GPU job each for:
-#   yes_no (last + question tokens), full answers steered at the last token, full answers steered at every question token
+# Submits the diffmeans steering jobs for both models at every steering position, one GPU job each for:
+#   yes_no (last + question tokens), full answers steered at the last token, full answers steered at every question token,
+#   and both full-answer jobs again with --steer_generation (also every generated token; outputs in <positions>_gen/)
 # If a model has no directions yet, one get_diffmeans_directions.sh job builds them first and its steering jobs wait
 # for it (so they do not all rebuild them). Extra arguments go to run_diffmeans_steering.py for every job.
 # Run from mechanistic-search/ on the login node:  bash submit_diffmeans_steering.sh
@@ -10,10 +11,12 @@ MODELS=(   # "<hf name> <output tag>"
     "meta-llama/Meta-Llama-3-8B-Instruct llama3-8B-instruct"
     "allenai/OLMo-2-1124-7B-Instruct olmo2-7B-instruct"
 )
-JOBS=(     # "<answer> <positions>"
-    "yes_no last question"
-    "full last"
-    "full question"
+JOBS=(     # "<answer>|<positions>|<extra run_diffmeans_steering.py arguments>"
+    "yes_no|last question|"
+    "full|last|"
+    "full|question|"
+    "full|last|--steer_generation"
+    "full|question|--steer_generation"
 )
 
 mkdir -p logs
@@ -27,9 +30,10 @@ for entry in "${MODELS[@]}"; do
         dependency="--dependency=afterok:$id"
     fi
     for job in "${JOBS[@]}"; do
-        read -r answer positions <<< "$job"
+        IFS="|" read -r answer positions extra <<< "$job"
+        name="${tag}_steer_${answer}_${positions// /_}${extra:+_gen}"
         sbatch $dependency --export="ALL,MODEL=$model,MODEL_TAG=$tag,ANSWER=$answer,POSITIONS=$positions" \
-            --job-name="${tag}_steer_${answer}_${positions// /_}" run_diffmeans_steering.sh "$@"
+            --job-name="$name" run_diffmeans_steering.sh $extra "$@"
     done
 done
 squeue -u "$USER"

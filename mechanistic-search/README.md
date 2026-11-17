@@ -237,13 +237,38 @@ every generated token, so the push lasts the whole answer (outputs in `<last|que
 `answer_unchanged`, the fraction of steered answers identical to the unsteered one.
 
 ```bash
-bash submit_diffmeans_steering.sh                   # both models: yes_no, full/last, full/question (6 jobs)
+bash submit_diffmeans_steering.sh                   # both models: yes_no, full/{last,question}{,_gen} (10 jobs)
 bash submit_diffmeans_steering.sh --num_reviews 2   # quick check of every job
 ```
 
 The submit script builds a model's directions first (one job) if they do not exist, and the steering jobs wait for it.
 Outputs go to `outputs/<model_tag>/diffmeans_steering/<yes_no|full>/<last|question>/`: `pairs.jsonl`, `summary.json`,
 `steering.png`.
+
+## Steering sweep: strength x layer x token site (`run_steering_sweep.py`)
+
+How strong a push (beta) has to be, and where (layer x token), for the diffmeans directions to move the yes/no answer
+of the bare claim. 25 held-out test reviews sampled with the seed (50 prompts; `--num_reviews`). Vectors:
+`framing`, `role_shared`, `role_dme` (doctor - enemy), norm-matched random controls (`random_framing`, `random_role`),
+and `framing_matched` / `role_shared_matched`: the direction fit at the token being steered (only at single-token sites).
+beta = 1 adds the full mean difference; default betas -8 -4 -2 -1 -0.5 0.5 1 2 4 8, every layer.
+
+Sites: `intervention` (last token of the treatment), `verdict` (` work`), `claim_end` (`.`), `question_end` (`?`),
+`last`, `question_span` (question tokens), `after_question` (instruction + chat template), `question` (question
+start to end, as `--positions question` above) and `all` (every token but the first).
+
+Each push records D, p(Yes) + p(No) and whether the top token is still Yes/No. The best-push tables ignore pushes
+with p(Yes) + p(No) below `--min_mass` (0.5), so a large beta that breaks the model does not count as the best one.
+
+```bash
+bash submit_steering_sweep.sh                                              # both models, one GPU job each
+OUT_NAME=sweep_test bash submit_steering_sweep.sh --num_reviews 2 --layers 8 16 24   # quick check
+```
+
+Outputs in `outputs/<model_tag>/steering_sweep/`: `eval_reviews.json`, `prompts/<review>_<framing>.pt` (resumable),
+`sweep.csv` (vector x site x layer x beta: mean shift, framing effect change, framing recovery, |shift|, yes/no mass),
+`summary.json` (real-prompt references and the best site/layer per vector and beta), `heatmaps/<vector>_<metric>.png`
+(layer x beta per site) and `best_by_site.png`.
 
 ## Unit-vector steering at the last token (`run_unit_steering.py`)
 
