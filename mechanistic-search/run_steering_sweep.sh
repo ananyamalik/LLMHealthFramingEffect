@@ -16,7 +16,7 @@
 # Needs the diffmeans directions (get_diffmeans_directions.sh); submit_steering_sweep.sh builds them if missing.
 # Submit from mechanistic-search/:
 #   mkdir -p logs
-#   bash submit_steering_sweep.sh                                            # both models
+#   bash submit_steering_sweep.sh                                            # one model (OLMo 2 7B by default)
 #   sbatch run_steering_sweep.sh --num_reviews 2 --layers 8 16 24            # quick check, Llama 3 8B
 #   sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_steering_sweep.sh
 # Resumable (one file per prompt in prompts/), so resubmit after a timeout. A different grid needs a new OUT_NAME.

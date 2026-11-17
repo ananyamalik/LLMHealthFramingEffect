@@ -261,7 +261,7 @@ Each push records D, p(Yes) + p(No) and whether the top token is still Yes/No. T
 with p(Yes) + p(No) below `--min_mass` (0.5), so a large beta that breaks the model does not count as the best one.
 
 ```bash
-bash submit_steering_sweep.sh                                              # both models, one GPU job each
+bash submit_steering_sweep.sh                                              # OLMo 2 7B, one GPU job (MODEL=/MODEL_TAG= for another)
 OUT_NAME=sweep_test bash submit_steering_sweep.sh --num_reviews 2 --layers 8 16 24   # quick check
 ```
 
