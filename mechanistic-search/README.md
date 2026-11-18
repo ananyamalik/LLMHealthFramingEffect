@@ -384,3 +384,23 @@ sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-ins
 
 Outputs in `outputs/<model_tag>/interaction_patching/<last|last_gen>/`: `pairs.jsonl` (resumable), `summary.json`,
 `interaction_patching.png`, `side_by_side.csv` (each edited answer next to the clean one and the bare claim's).
+
+## Bilinear check with intermediate framings (`run_bilinear_check.py`)
+
+The bilinear model A(s, r) = A00 + s·f + r·d_neg + s·r·I fits the four 2×2 corners exactly for any I, so the 2×2 cannot
+test it; what it assumes is a straight line in the framing s. This adds 5 framing levels to the claim (`will
+definitely work`, `will probably work`, `may or may not work`, `probably won't work`, `definitely won't work`; `pos` /
+`neg` are the diffmeans prompts) and, per role and layer over random halves of the reviews (fit on one half, scored on
+the other), compares the role effect d(level) = A(level, role) − A(level, none) with the bilinear prediction
+d_neg + t·I, where t is the level's measured framing coordinate in the bare prompt (neg 0, pos 1). Reported: the
+residual / |I| (bilinear, and the additive and nearest-endpoint step baselines), its noise floor (the same residual at
+held-out endpoints), t_I (where d(level) sits on the I line; bilinear: t_I = t) and the bare response's distance from
+the straight framing line.
+
+```bash
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_bilinear_check.sh
+python run_bilinear_check.py --output_dir outputs/<model_tag>/bilinear_check --analyze_only    # CPU, reuses acts.pt
+```
+
+Outputs in `outputs/<model_tag>/bilinear_check/`: `acts.pt` (layers 16 18 20 24 31), `summary.json`,
+`bilinear_check_L<layer>.png`.
