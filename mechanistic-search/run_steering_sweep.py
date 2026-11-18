@@ -11,6 +11,9 @@ Vectors (diffmeans directions, <diffmeans_dir>/<anchor>/directions.pt; beta = 1 
     role_dme          doctor - enemy                                                (anchor yes_no)
     random_framing    a fixed random direction per layer with the norm of framing   (control)
     random_role       a fixed random direction per layer with the norm of role_shared (control)
+    role_dme_perp     (--perp_k K) role_dme with the K-dim framing subspace projected out (pca_authority_direction.py,
+                      <diffmeans_dir>/<anchor>/authority_pca/directions_framing_ablated.pt): does the authority push
+                      still move the answer without its framing part?
     framing_matched, role_shared_matched   (--matched, the default) the same directions fit at the token being steered
                       (intervention / verdict / claim_end / question_end; the yes_no anchor for last), so the push is
                       the difference the model actually has at that token. Only at the single-token anchor sites.
@@ -68,12 +71,12 @@ DEFAULT_BETAS = [-8, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 8]
 FORMAT = 2   # prompts/*.pt from before the layer-indexing fix (no "format") are recomputed
 
 
-def vector_names(matched: bool) -> list[str]:
-    names = list(BASE_VECTORS) + ["random_framing", "random_role"]
+def vector_names(matched: bool, perp: bool = False) -> list[str]:
+    names = list(BASE_VECTORS) + (["role_dme_perp"] if perp else []) + ["random_framing", "random_role"]
     return names + (["framing_matched", "role_shared_matched"] if matched else [])
 
 
-def load_vectors(diffmeans_dir: str, anchor: str, matched: bool, seed: int) -> tuple[dict, list[str], str]:
+def load_vectors(diffmeans_dir: str, anchor: str, matched: bool, seed: int, perp_k: int | None = None) -> tuple[dict, list[str], str]:
     """vectors[name][site] -> [layers, d_model] (the same tensor for every site except the matched vectors)."""
     fit = torch.load(os.path.join(diffmeans_dir, anchor, "directions.pt"))
     dirs = fit["directions"]
@@ -86,6 +89,12 @@ def load_vectors(diffmeans_dir: str, anchor: str, matched: bool, seed: int) -> t
     base = {name: dirs[key] for name, key in BASE_VECTORS.items()}
     base["random_framing"] = random_like(dirs["framing"])
     base["random_role"] = random_like(dirs["shared"])
+    if perp_k is not None:
+        path = os.path.join(diffmeans_dir, anchor, "authority_pca", "directions_framing_ablated.pt")
+        ablated = torch.load(path)
+        if sorted(ablated["test_reviews"]) != sorted(fit["test_reviews"]):
+            raise ValueError(f"{path} has a different test split")
+        base["role_dme_perp"] = ablated["directions"][f"doctor_minus_enemy_perp_k{perp_k}"]
     vectors = {name: {site: v for site in SITES} for name, v in base.items()}
     if matched:
         for name, key in [("framing_matched", "framing"), ("role_shared_matched", "shared")]:
@@ -282,7 +291,7 @@ def plot_best_by_site(metrics: dict, names, layers, betas, min_mass: float, path
             ax.axhline(1, color="black", lw=0.8, ls=":")
         elif n in ("role_shared", "role_shared_matched"):
             ax.axhline(reference["real_shared_shift"], color="black", lw=0.8, ls=":")
-        elif n == "role_dme":
+        elif n in ("role_dme", "role_dme_perp"):
             ax.axhline(reference["real_doctor_minus_enemy"] / 2, color="black", lw=0.8, ls=":")   # half: from the midpoint
         ax.axhline(0, color="gray", lw=0.6)
         ax.set_xticks(range(len(betas)))
@@ -309,10 +318,10 @@ def write_csv(rows: list[dict], path: str) -> None:
 
 def main(args):
     set_global_seed(SEED)
-    vectors, test_reviews, fit_model = load_vectors(args.diffmeans_dir, args.anchor, args.matched, args.seed)
+    vectors, test_reviews, fit_model = load_vectors(args.diffmeans_dir, args.anchor, args.matched, args.seed, args.perp_k)
     if fit_model and fit_model != args.model:
         raise ValueError(f"directions were fit on {fit_model}, not {args.model}")
-    names = [n for n in (args.vectors or vector_names(args.matched)) if n in vectors]
+    names = [n for n in (args.vectors or vector_names(args.matched, args.perp_k is not None)) if n in vectors]
     test = set(test_reviews)
     dataset = sample_reviews([e for e in load_dataset(args.input_path) if e["ReviewID"] in test], args.num_reviews, args.seed)
     betas = [float(b) for b in args.betas]
@@ -392,7 +401,9 @@ if __name__ == "__main__":
     parser.add_argument("--diffmeans_dir", required=True, help="output dir of get_diffmeans_directions.py.")
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--anchor", default="yes_no", help="anchor of the (non-matched) directions.")
-    parser.add_argument("--vectors", nargs="+", default=None, help=f"subset of {vector_names(True)} (default: all).")
+    parser.add_argument("--vectors", nargs="+", default=None, help=f"subset of {vector_names(True, True)} (default: all).")
+    parser.add_argument("--perp_k", default=None, type=int, help="add role_dme_perp: role_dme minus the K-dim framing "
+                        "subspace (run pca_authority_direction.py first; K must be one of its --ks).")
     parser.add_argument("--no_matched", dest="matched", action="store_false", help="skip the site-matched directions.")
     parser.add_argument("--betas", nargs="+", type=float, default=DEFAULT_BETAS)
     parser.add_argument("--layers", nargs="*", type=int, default=None, help="layers to steer (default: every --layer_stride).")

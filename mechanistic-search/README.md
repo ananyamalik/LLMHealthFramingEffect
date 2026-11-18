@@ -270,6 +270,24 @@ Outputs in `outputs/<model_tag>/steering_sweep/`: `eval_reviews.json`, `prompts/
 `summary.json` (real-prompt references and the best site/layer per vector and beta), `heatmaps/<vector>_<metric>.png`
 (layer x beta per site) and `best_by_site.png`.
 
+## PCA of the authority direction and framing ablation (`pca_authority_direction.py`)
+
+CPU only, on the diffmeans `activations.pt` and train/test split. Authority differences a = x[doctor] − x[enemy], one
+per (review, framing); `role_dme` is their mean. Per layer: the share of the authority signal in that mean, a centered
+PCA of a (per PC: explained variance, cosine with framing, norm inside the framing subspace, held-out AUC for
+positive vs negative, held-out correlation with D(doctor) − D(enemy)), and `role_dme` with a K-dim framing subspace
+(framing direction + top K−1 PCs of the per-review framing differences) projected out, with its held-out doctor vs
+enemy AUC and framing leak.
+
+```bash
+python pca_authority_direction.py --diffmeans_dir outputs/<model_tag>/diffmeans --anchors yes_no last --in_memory
+OUT_NAME=steering_sweep_perp bash submit_steering_sweep.sh --perp_k 4 --vectors role_dme role_dme_perp random_role --no_matched
+```
+
+Outputs in `outputs/<model_tag>/diffmeans/<anchor>/authority_pca/`: `summary.json`, `authority_pca.png`,
+`directions_framing_ablated.pt` (`doctor_minus_enemy_perp_k<K>`, the authority PCs, the framing bases), which
+`run_steering_sweep.py --perp_k K` adds as the vector `role_dme_perp`.
+
 ## Unit-vector steering at the last token (`run_unit_steering.py`)
 
 Self-contained. Extracts, at the last prompt token of `Question: <claim>` (training reviews):
