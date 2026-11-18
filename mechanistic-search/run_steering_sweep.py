@@ -65,6 +65,7 @@ MATCHED_ANCHOR = {"intervention": "intervention", "verdict": "verdict", "claim_e
 BASE_VECTORS = {"framing": "framing", "role_shared": "shared", "role_dme": "doctor_minus_enemy"}   # name -> direction key
 FRAMING_LIKE = {"framing", "framing_matched"}   # vectors whose push is scored as framing recovery
 DEFAULT_BETAS = [-8, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 8]
+FORMAT = 2   # prompts/*.pt from before the layer-indexing fix (no "format") are recomputed
 
 
 def vector_names(matched: bool) -> list[str]:
@@ -154,7 +155,8 @@ def sweep_prompt(model, ids, positions, vectors, names, layers, betas, args, yes
                 vec = vectors[names[vi]][SITES[si]][layer].to(model.device, model.dtype)
                 delta[i, positions[SITES[si]]] = betas[bi] * vec
             ds, ms, ok = forward_batch(model, ids, layer, delta, yes_no_ids)
-            for i, idx in enumerate(batch):
+            for i, (vi, si, bi) in enumerate(batch):
+                idx = (vi, si, li, bi)
                 d[idx], mass[idx], top_ok[idx] = ds[i], ms[i], ok[i]
             del delta
     return {"d": d, "mass": mass, "top_ok": top_ok}
@@ -332,8 +334,11 @@ def main(args):
         for framing, claim in get_claims(example).items():
             path = os.path.join(args.output_dir, "prompts", f"{example['ReviewID']}_{framing}.pt")
             if os.path.exists(path):
-                records.append(torch.load(path, weights_only=False))
-                continue
+                saved = torch.load(path, weights_only=False)
+                if saved.get("format") == FORMAT:
+                    records.append(saved)
+                    continue
+                print(f"{path} is from an older version of this script: recomputing it")
             ids, encoding, question_start = encode_prompt(tokenizer, "yes_no", claim, [], model.device, "question_only")
             positions = site_positions(encoding, question_start, claim, ids.shape[1])
             d_clean = float(forward_batch(model, ids, None, None, yes_no_ids)[0][0])
@@ -344,7 +349,8 @@ def main(args):
             record = {"review_id": example["ReviewID"], "framing": framing, "question": claim, "d_clean": d_clean,
                       "d_roles": d_roles, "positions": positions,
                       "site_tokens": {s: tokenizer.decode(ids[0, p].tolist()) for s, p in positions.items()},
-                      "vectors": names, "sites": SITES, "layers": layers, "betas": betas}
+                      "vectors": names, "sites": SITES, "layers": layers, "betas": betas,
+                      "format": FORMAT}
             record |= sweep_prompt(model, ids, positions, vectors, names, layers, betas, args, yes_no_ids)
             torch.save(record, path)
             records.append(record)
