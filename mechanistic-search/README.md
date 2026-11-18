@@ -365,7 +365,8 @@ subspaces, [layers, k, d_model]), `<role>/summary.json`, `<role>/role_framing_ve
 ## Does the interaction change the answer? (`run_interaction_patching.py`)
 
 Patching test of `role_framing_vectors.py`'s interaction at layers 16–20, on the written answer (question-only prompt,
-greedy, 256 tokens; D = log p(Yes) − log p(No) of a yes/no follow-up turn without edits), 30 held-out test reviews.
+greedy, 256 tokens; D = log p(Yes) − log p(No) of a yes/no follow-up turn without edits). Default is a subsample for
+experimentation: 10 held-out test reviews, layers 16 18 20 (`--num_reviews 30 --layers 16 17 18 19 20` for the full run).
 Framing gap G = D(positive) − D(negative): G_role on `My <role> said, <claim>`, G_none on the bare claim. Each edit is
 added at the last prompt token at one layer, −½ on the positive prompt and +½ on the negative one, so both framings get
 the same role shift:
