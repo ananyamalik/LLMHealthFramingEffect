@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --nodes=1
-#SBATCH --time=02:00:00
+#SBATCH --time=06:00:00
 #SBATCH --job-name=inter_patch
 #SBATCH --cpus-per-task=8
 #SBATCH --ntasks-per-node=1
@@ -12,8 +12,9 @@
 #SBATCH -e logs/inter_patch_error_%j.txt   # Standard error file
 
 # Patching test of the role x framing interaction vector on the written answer (run_interaction_patching.py).
-# Default: a subsample for experimentation, 10 test reviews x layers 16 18 20 (~1.5k answers; under an hour on most GPUs).
-# Bigger run: --num_reviews 30 --layers 16 17 18 19 20 (~7.4k answers, ~2 h: raise --time).
+# Default: a subsample for experimentation, 10 test reviews x layers 16 18 20 x strengths lambda 1 4 16, conditions
+# inter inter_perp review random none+inter none+random (~3.3k answers). Outputs in interaction_patching/last_lambda1_4_16/.
+# Finer sweep: --lambdas 1 2 4 8 16 (or e.g. --lambdas -4 -1 1 4 16 for both directions); fewer layers: --layers 16.
 # Needs outputs/<model_tag>/diffmeans/activations.pt; the vectors (role_framing_vectors.py, CPU) are fit first if missing.
 # Submit from mechanistic-search/:
 #   mkdir -p logs

@@ -372,17 +372,20 @@ added at the last prompt token at one layer, −½ on the positive prompt and +�
 the same role shift:
 
 - role prompts (necessity): `inter`, `inter_par`, `inter_perp` (train means), `review` (the review's own interaction from
-  its 4 real states: the additive counterfactual of the prompt), `add_inter` (doubled, dose check), `random` (|inter|)
+  its 4 real states: the additive counterfactual of the prompt), `random` (|inter|)
 - bare claim (sufficiency): `none+inter|<role>`, `none+random|<role>` (sign reversed: give the bare claim the role's gap)
-- `recovery` = (gap − G_role) / (G_none − G_role) (1: the role's framing gap is gone; `add_inter`: −1), `transfer` =
+- `recovery` = (gap − G_role) / (G_none − G_role) (1: the role's framing gap is gone), `transfer` =
   (gap − G_none) / (G_role − G_none), paired bootstrap intervals; `answer_unchanged`; per-framing D shifts
+- strength sweep `--lambdas` (default 1 4 16): the edit is λ times the above (λ = 1 the exact removal, λ < 0 the other
+  way, −1 doubles the interaction); `edit_ratio` = |edit| / |h| and the follow-up's p(Yes) + p(No) show where a large λ
+  breaks the answer. `inter_par` (and the old `add_inter` = λ −1) via `--conditions` / `--lambdas`
 
 ```bash
 sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_interaction_patching.sh
 sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_interaction_patching.sh --steer_generation
 ```
 
-Outputs in `outputs/<model_tag>/interaction_patching/<last|last_gen>/`: `pairs.jsonl` (resumable), `summary.json`,
+Outputs in `outputs/<model_tag>/interaction_patching/<last|last_gen>_lambda<λs>/`: `pairs.jsonl` (resumable), `summary.json`,
 `interaction_patching.png`, `side_by_side.csv` (each edited answer next to the clean one and the bare claim's).
 
 ## Bilinear check with intermediate framings (`run_bilinear_check.py`)
