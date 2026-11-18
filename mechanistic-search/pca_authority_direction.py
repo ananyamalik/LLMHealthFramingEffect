@@ -1,3 +1,4 @@
+
 """
 Principal components of the authority (doctor - enemy) direction, and the authority direction with the framing
 subspace projected out. CPU only: reuses get_diffmeans_directions.py's activations.pt and train/test split.
