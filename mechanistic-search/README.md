@@ -340,3 +340,46 @@ said@4 8, claim@8 12, last@16 20 24, all@16), next to the doctor and friend answ
 ```bash
 sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_framing_role_full_answers.sh
 ```
+
+## Framing × role at the long-form prompt (`role_framing_vectors.py`)
+
+CPU only, on the diffmeans `activations.pt` and train/test split (anchor `last`: the question-only prompt's last token,
+where the full answer starts). Per role and layer, with A<sub>role,framing</sub> the cell means over training reviews
+(A₀₀ = `X won't work`, A₀₁ = `X will work`, A₁₀ / A₁₁ = the same after `My <role> said,`):
+
+- `f` = A₀₁ − A₀₀, `d_pos` = A₁₁ − A₀₁, `d_neg` = A₁₀ − A₀₀, `inter` = `d_pos` − `d_neg` = (A₁₁ − A₁₀) − (A₀₁ − A₀₀)
+- decomposition: `inter_par` = (inter·f̂) f̂, `inter_perp` = inter − inter_par; `gain` = inter·f̂ / |f| (> 0: the role
+  widens the framing gap), `perp_frac` = |inter_perp| / |inter|, `inter_over_dpos`, and sign-flip nulls for |inter| and
+  |inter_perp| (bootstrap intervals over reviews)
+- subspaces: top-k centered SVD of the per-review `d_pos` and `d_neg`, principal-angle cosines and overlap (mean cos²);
+  `ratio` = overlap across the two (half vs half of the reviews) ÷ the same subspace's overlap with itself
+  (half vs half), so sampling noise does not read as a different subspace
+
+```bash
+python role_framing_vectors.py --diffmeans_dir outputs/<model_tag>/diffmeans --in_memory          # doctor, friend, enemy
+```
+
+Outputs in `<diffmeans_dir>/last/role_framing_vectors/`: `<role>/directions.pt` (the vectors and the `pos` / `neg`
+subspaces, [layers, k, d_model]), `<role>/summary.json`, `<role>/role_framing_vectors.png`, `comparison.png`.
+
+## Does the interaction change the answer? (`run_interaction_patching.py`)
+
+Patching test of `role_framing_vectors.py`'s interaction at layers 16–20, on the written answer (question-only prompt,
+greedy, 256 tokens; D = log p(Yes) − log p(No) of a yes/no follow-up turn without edits), 30 held-out test reviews.
+Framing gap G = D(positive) − D(negative): G_role on `My <role> said, <claim>`, G_none on the bare claim. Each edit is
+added at the last prompt token at one layer, −½ on the positive prompt and +½ on the negative one, so both framings get
+the same role shift:
+
+- role prompts (necessity): `inter`, `inter_par`, `inter_perp` (train means), `review` (the review's own interaction from
+  its 4 real states: the additive counterfactual of the prompt), `add_inter` (doubled, dose check), `random` (|inter|)
+- bare claim (sufficiency): `none+inter|<role>`, `none+random|<role>` (sign reversed: give the bare claim the role's gap)
+- `recovery` = (gap − G_role) / (G_none − G_role) (1: the role's framing gap is gone; `add_inter`: −1), `transfer` =
+  (gap − G_none) / (G_role − G_none), paired bootstrap intervals; `answer_unchanged`; per-framing D shifts
+
+```bash
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_interaction_patching.sh
+sbatch --export=ALL,MODEL=allenai/OLMo-2-1124-7B-Instruct,MODEL_TAG=olmo2-7B-instruct run_interaction_patching.sh --steer_generation
+```
+
+Outputs in `outputs/<model_tag>/interaction_patching/<last|last_gen>/`: `pairs.jsonl` (resumable), `summary.json`,
+`interaction_patching.png`, `side_by_side.csv` (each edited answer next to the clean one and the bare claim's).
