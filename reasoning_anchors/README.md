@@ -5,7 +5,24 @@ The framing / role / interaction analysis of `mechanistic-search/` (`run_interac
 stream recorded on the prompt **and at every token the model generates** (its reasoning trace and its answer).
 
 Default model: `Qwen/Qwen3-0.6B` with thinking on (28 layers, d_model 1024). It runs on a laptop CPU.
-`Qwen/Qwen3-1.7B` and `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` also work (`--model ... --model_tag ...`).
+Other reasoning models work too (`MODEL=... MODEL_TAG=...`): any chat model that reasons inside `<think> ... </think>`.
+The tags are found by their text, so it does not matter whether they are single special tokens (Qwen3, R1 distills) or
+ordinary text split into pieces (OLMo 3 Think: `</`, `think`, `>`), or whether the chat template already opens `<think>`
+(OLMo 3, R1 distills) or the model writes it (Qwen3). Non-reasoning models (e.g. OLMo 2 Instruct) never close a
+reasoning block, so every question would hit the forced `</think>`; use mechanistic-search for those.
+
+| model | tag | layers, d_model | notes |
+|---|---|---|---|
+| `Qwen/Qwen3-0.6B` / `1.7B` / `4B` / `8B` | special tokens, model writes `<think>` | 28×1024 … 36×4096 | |
+| `allenai/Olmo-3-7B-Think` | 3 text tokens, template opens `<think>` | 32×4096 | transformers >= 4.57; `last` anchor is the `>` of the template's `<think>` |
+| `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | special tokens, template opens `<think>` | 28×1536 | |
+
+For 4B+ models use a GPU (`GPU=1`) and `--no_trajectories` (full trajectories are ~100–150 MB per question):
+
+```bash
+GPU=1 MODEL=allenai/Olmo-3-7B-Think MODEL_TAG=olmo3-7B-think NUM_SHARDS=2 \
+    bash jobs/submit.sh --num_reviews 100 --no_trajectories --max_answer_tokens 384
+```
 
 ## Setup
 

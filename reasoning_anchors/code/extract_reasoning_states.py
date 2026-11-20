@@ -118,11 +118,33 @@ def single_ids(tokenizer, strings: list[str]) -> list[int]:
     return out
 
 
-def special_id(tokenizer, token: str) -> int:
-    ids = tokenizer.encode(token, add_special_tokens=False)
-    if len(ids) != 1:
-        raise ValueError(f"{token!r} is not a single token in this tokenizer ({ids}); is this a reasoning model?")
-    return ids[0]
+THINK_OPEN, THINK_CLOSE = "<think>", "</think>"
+TAG_WINDOW = 8   # tokens decoded to look for a tag: enough for a tag split into pieces (OLMo 3: "<", "think", ">")
+
+
+def has_tag(tokenizer, ids: list[int], tag: str) -> bool:
+    """Whether the text of the last TAG_WINDOW tokens contains `tag`. Matching text, not a token id, works whether the
+    tag is one special token (Qwen3, R1 distills) or several ordinary ones (OLMo 3 Think)."""
+    return tag in tokenizer.decode(ids[-TAG_WINDOW:], skip_special_tokens=False)
+
+
+def tag_start(tokenizer, gen: list[int], end: int, tag: str) -> int:
+    """First token of the `tag` that ends at gen[end] (= end when the tag is a single token)."""
+    j = end
+    while j > 0 and tag not in tokenizer.decode(gen[j:end + 1], skip_special_tokens=False):
+        j -= 1
+    return j
+
+
+def reasoning_start(tokenizer, prompt_text: str, gen: list[int]) -> int:
+    """Index of the first reasoning token: 0 if the chat template already opened <think> (OLMo 3, R1 distills),
+    else the token after the model's own <think> (Qwen3)."""
+    if prompt_text.rstrip().endswith(THINK_OPEN):
+        return 0
+    for i in range(min(len(gen), TAG_WINDOW)):
+        if THINK_OPEN in tokenizer.decode(gen[:i + 1], skip_special_tokens=False):
+            return i + 1
+    return 0
 
 
 def stop_ids(model, tokenizer) -> set[int]:
@@ -163,9 +185,10 @@ class ResidualRecorder:
 
 
 @torch.no_grad()
-def generate_with_states(model, prompt_ids: torch.Tensor, stops: set[int], think_end_ids: list[int],
-                         think_end_id: int, max_think: int, max_answer: int) -> dict:
-    """Greedy decoding with KV cache and per-step residual recording. Forces </think> after max_think reasoning tokens."""
+def generate_with_states(model, tokenizer, prompt_ids: torch.Tensor, stops: set[int], think_end_ids: list[int],
+                         max_think: int, max_answer: int) -> dict:
+    """Greedy decoding with KV cache and per-step residual recording. Forces </think> after max_think reasoning tokens.
+    think_end = index of the token that completes the </think> text."""
     with ResidualRecorder(model) as rec:
         out = model(input_ids=prompt_ids, use_cache=True)
         rec.commit()
@@ -177,11 +200,11 @@ def generate_with_states(model, prompt_ids: torch.Tensor, stops: set[int], think
                 next_id = pending.pop(0)
             else:
                 next_id = int(logits.argmax())
-                if think_end is None and next_id != think_end_id and len(gen) >= max_think:
+                if think_end is None and len(gen) >= max_think and not has_tag(tokenizer, gen + [next_id], THINK_CLOSE):
                     pending, forced = list(think_end_ids), True
                     next_id = pending.pop(0)
             gen.append(next_id)
-            if next_id == think_end_id and think_end is None:
+            if think_end is None and has_tag(tokenizer, gen, THINK_CLOSE):
                 think_end = len(gen) - 1
             n_answer = len(gen) - (think_end + 1) if think_end is not None else 0
             if next_id in stops or n_answer >= max_answer:
@@ -216,16 +239,16 @@ def bins(x: torch.Tensor, k: int) -> list[torch.Tensor]:
     return out
 
 
-def gen_sites(gen_states: torch.Tensor, think_start: int, think_end: int | None, answer_start: int | None,
-              args) -> dict[str, torch.Tensor]:
-    """Generation sites from gen_states [layers, n, d]. think span = (think_start, think_end) exclusive of the tags."""
+def gen_sites(gen_states: torch.Tensor, think_start: int, body_end: int, think_end: int | None,
+              answer_start: int | None, args) -> dict[str, torch.Tensor]:
+    """Generation sites from gen_states [layers, n, d]. Reasoning = think_start .. body_end (exclusive, without the
+    tags); think_end = the token that completes </think>."""
     n = gen_states.shape[1]
     sites = {}
     if n == 0:
         return sites
     sites["gen_mean"] = gen_states.float().mean(1).half()
-    t_end = think_end if think_end is not None else n
-    think = gen_states[:, think_start:min(t_end, n)]
+    think = gen_states[:, think_start:min(body_end, n)]
     if think.shape[1] > 0:
         sites["think_mean"] = think.float().mean(1).half()
         for k, v in enumerate(bins(think, args.think_bins)):
@@ -257,14 +280,16 @@ def run_question(model, tokenizer, review_id, framing, role, claim, ctx, args) -
     positions["claim_start"] = enc.char_to_token(claim_start)
 
     t0 = time.time()
-    g = generate_with_states(model, ids, ctx["stops"], ctx["think_end_ids"], ctx["think_end_id"],
+    g = generate_with_states(model, tokenizer, ids, ctx["stops"], ctx["think_end_ids"],
                              args.max_think_tokens, args.max_answer_tokens)
     seconds = time.time() - t0
     gen = g["gen_ids"]
 
-    # Spans in generated-token indices. The template may already contain <think> (R1-style), else the model writes it.
-    think_start = 1 if gen and gen[0] == ctx["think_start_id"] else 0
+    # Spans in generated-token indices. The template may already contain <think> (OLMo 3, R1-style), else the model
+    # writes it (Qwen3). The reasoning is think_start .. body_end (exclusive), the </think> tag body_end .. think_end.
+    think_start = reasoning_start(tokenizer, text, gen)
     think_end = g["think_end"]
+    body_end = tag_start(tokenizer, gen, think_end, THINK_CLOSE) if think_end is not None else len(gen)
     answer_start = None
     if think_end is not None:
         answer_start = think_end + 1
@@ -272,12 +297,11 @@ def run_question(model, tokenizer, review_id, framing, role, claim, ctx, args) -
             answer_start += 1
         if answer_start >= len(gen) or gen[answer_start] in ctx["stops"]:
             answer_start = None
-    reasoning = tokenizer.decode(gen[think_start:think_end if think_end is not None else len(gen)],
-                                 skip_special_tokens=True).strip()
+    reasoning = tokenizer.decode(gen[think_start:body_end], skip_special_tokens=True).strip()
     answer = tokenizer.decode(gen[answer_start:], skip_special_tokens=True).strip() if answer_start is not None else ""
 
     sites = {a: g["prompt_states"][:, positions[a]] for a in ANCHORS}
-    sites |= gen_sites(g["gen_states"], think_start, think_end, answer_start, args)
+    sites |= gen_sites(g["gen_states"], think_start, body_end, think_end, answer_start, args)
     sites = {k: v.clone() for k, v in sites.items()}   # views would save their whole parent tensor
 
     yn_user = render_prompt("question_only_yes_no", template_dir=TEMPLATE_DIR, question=question)
@@ -292,14 +316,15 @@ def run_question(model, tokenizer, review_id, framing, role, claim, ctx, args) -
     row = {"key": key, "review_id": review_id, "framing": framing, "role": role, "question": question,
            "prompt_text": text, "generation": tokenizer.decode(gen, skip_special_tokens=False),
            "reasoning": reasoning, "answer": answer, "n_prompt": ids.shape[1], "n_gen": len(gen),
-           "n_think": (think_end if think_end is not None else len(gen)) - think_start,
+           "n_think": body_end - think_start,
            "n_answer": len(gen) - answer_start if answer_start is not None else 0,
-           "think_start": think_start, "think_end": think_end, "answer_start": answer_start,
+           "think_start": think_start, "think_end": think_end, "think_tag_start": body_end, "answer_start": answer_start,
            "forced_think_end": g["forced_think_end"], "ended": bool(gen) and gen[-1] in ctx["stops"],
            "positions": positions, "d_nothink": d_nothink, "d_after": d_after, "seconds": round(seconds, 1),
            "tok_per_s": round(len(gen) / max(seconds, 1e-6), 2), "sites": sorted(sites)}
     traj = {"prompt_states": g["prompt_states"][args.traj_layers], "gen_states": g["gen_states"][args.traj_layers],
             "prompt_ids": ids[0].tolist(), "gen_ids": gen, "think_start": think_start, "think_end": think_end,
+            "think_tag_start": body_end,
             "answer_start": answer_start, "layers": args.traj_layers}
     return row, sites, traj
 
@@ -350,9 +375,8 @@ def main(args):
     model, tokenizer = load_model(args.model, args.dtype, DEVICE)
     num_layers = len(model.model.layers)
     args.traj_layers = args.traj_layers or list(range(num_layers))
-    ctx = {"stops": stop_ids(model, tokenizer), "think_start_id": special_id(tokenizer, "<think>"),
-           "think_end_id": special_id(tokenizer, "</think>"),
-           "think_end_ids": tokenizer.encode("\n</think>\n\n", add_special_tokens=False),
+    ctx = {"stops": stop_ids(model, tokenizer),
+           "think_end_ids": tokenizer.encode(f"\n{THINK_CLOSE}\n\n", add_special_tokens=False),
            "yes_ids": single_ids(tokenizer, YES_STRINGS), "no_ids": single_ids(tokenizer, NO_STRINGS)}
     w_u = model.lm_head.weight.float()
     answer_dir = (w_u[ctx["yes_ids"]].mean(0) - w_u[ctx["no_ids"]].mean(0)) * model.model.norm.weight.float()
@@ -362,7 +386,8 @@ def main(args):
             "prompt_sites": PROMPT_SITES, "gen_sites": GEN_SITES, "think_bins": args.think_bins,
             "answer_bins": args.answer_bins, "max_think_tokens": args.max_think_tokens,
             "max_answer_tokens": args.max_answer_tokens, "traj_layers": args.traj_layers, "dtype": args.dtype,
-            "yes_ids": ctx["yes_ids"], "no_ids": ctx["no_ids"], "think_end_id": ctx["think_end_id"],
+            "yes_ids": ctx["yes_ids"], "no_ids": ctx["no_ids"],
+            "think_close_ids": tokenizer.encode(THINK_CLOSE, add_special_tokens=False),
             "review_ids": [e["ReviewID"] for e in dataset], "seed": args.seed}
     with open(os.path.join(out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=1)
