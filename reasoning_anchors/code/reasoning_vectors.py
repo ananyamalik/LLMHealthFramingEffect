@@ -38,6 +38,9 @@ d_after (yes/no follow-up after the model's own answer) and d_nothink (yes/no pr
 (framing, role_<k>, inter_<k>), saved as projections/<key>.npz {proj: [vectors, layers, tokens], names, think_end,
 answer_start}, and plotted over the relative position in the reasoning trace (token_projection_L<l>.png).
 
+With --s3_uri, the run is read from S3 (trajectories streamed one at a time for --token_projections) and analysis/ is
+uploaded back under the same prefix.
+
 Outputs (in <run_dir>/analysis/):
     directions.pt      {site: {vector name: [layers, d_model] float32}} on all reviews, + reviews, sites
     summary.csv, transfer.csv, behavior.csv
@@ -278,15 +281,24 @@ def behavior(rows: list[dict], roles: list[str]) -> list[dict]:
 
 
 # Token projections
-def token_projections(run_dir: str, out_dir: str, rows: list[dict], dirs: dict, roles: list[str]) -> dict:
+def token_projections(run_dir: str, out_dir: str, rows: list[dict], dirs: dict, roles: list[str], store=None) -> dict:
+    """With an S3 store, each trajectory is downloaded, projected and deleted in turn (they are ~30 MB each)."""
     names = ["framing"] + [f"role_{r}" for r in roles] + [f"inter_{r}" for r in roles]
     os.makedirs(os.path.join(out_dir, "projections"), exist_ok=True)
+    remote = set(store.sizes("activations/trajectories")) if store is not None else set()
     results = {}
     for r in rows:
-        path = os.path.join(run_dir, "activations", "trajectories", f"{r['key']}.pt")
+        rel = f"activations/trajectories/{r['key']}.pt"
+        path = os.path.join(run_dir, rel)
+        streamed = False
         if not os.path.exists(path):
-            continue
+            if rel not in remote:
+                continue
+            store.download(rel, path)
+            streamed = True
         t = torch.load(path)
+        if streamed:
+            os.remove(path)
         layers = t["layers"]
         v = torch.stack([unit(dirs[n][layers]) for n in names])            # [names, L, d]
         proj = torch.einsum("nld,ltd->nlt", v, t["gen_states"].float()).numpy()
@@ -294,7 +306,8 @@ def token_projections(run_dir: str, out_dir: str, rows: list[dict], dirs: dict, 
                             layers=np.array(layers), think_start=t["think_start"],
                             think_end=-1 if t["think_end"] is None else t["think_end"],
                             answer_start=-1 if t["answer_start"] is None else t["answer_start"])
-        results[r["key"]] = (proj, t, layers)
+        spans = {k: t[k] for k in ("think_start", "think_end", "answer_start")}   # not the states: keeps memory small
+        results[r["key"]] = (proj, spans, layers)
     return results
 
 
@@ -436,6 +449,12 @@ def write_csv(rows: list[dict], path: str):
 
 
 def main(args):
+    store = None
+    if args.s3_uri:   # copy the run (all but the trajectories) from S3 into --run_dir, a local working folder
+        from s3_store import S3Store
+        store = S3Store(args.s3_uri)
+        n = store.download_dir("", args.run_dir, exclude=("activations/trajectories", "analysis"))
+        print(f"Downloaded {n} files from {store.uri} to {args.run_dir}")
     meta, rows, answer_dir = load_run(args.run_dir)
     roles = args.roles or meta["roles"]
     out_dir = os.path.join(args.run_dir, "analysis")
@@ -485,7 +504,7 @@ def main(args):
     if args.token_projections:
         if args.proj_site not in directions:
             raise SystemExit(f"--proj_site {args.proj_site} has no directions (sites: {order})")
-        results = token_projections(args.run_dir, out_dir, rows, directions[args.proj_site], roles)
+        results = token_projections(args.run_dir, out_dir, rows, directions[args.proj_site], roles, store)
         plot_token_projections(results, rows, roles, plot_layers, out_dir)
 
     # Console digest
@@ -500,11 +519,17 @@ def main(args):
         print(f"  {site:<14} " + "  ".join(f"{role} {vals[role]['inter_snr']:4.2f} (gain {vals[role]['gain']:+.2f})"
                                           for role in roles if role in vals))
     print(f"\nOutputs in {out_dir}")
+    if store is not None:
+        n = store.upload_dir(out_dir, "analysis")
+        print(f"Uploaded {n} files to {store.uri}/analysis")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Framing / role / interaction vectors through a reasoning model's generation")
-    p.add_argument("--run_dir", required=True, help="extract_reasoning_states.py output dir")
+    p.add_argument("--run_dir", required=True, help="extract_reasoning_states.py output dir (with --s3_uri: a local "
+                   "working folder the run is downloaded into)")
+    p.add_argument("--s3_uri", default=None, help="read the run from S3 and upload analysis/ back to it, e.g. "
+                   "s3://framing-interaction/reasoning_anchors/qwen3-0.6B")
     p.add_argument("--roles", nargs="*", default=None)
     p.add_argument("--num_perms", default=2000, type=int)
     p.add_argument("--source_sites", nargs="*", default=["last"], help="sites the transfer directions are fit at")

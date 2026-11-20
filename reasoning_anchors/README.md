@@ -69,41 +69,75 @@ The prompt sites are matched token for token, as in mechanistic-search.
 
 ```text
 reasoning_anchors/
-  code/extract_reasoning_states.py   runs the model: prompt + generation activations and the generated text
-  code/reasoning_vectors.py          CPU analysis: framing / role / interaction vectors at every site
-  jobs/run_extract.sh                both steps, locally (LOCAL=1) or on SLURM
-  outputs/<model_tag>/               see below
+  code/extract_reasoning_states.py   step 1 (GPU): prompt + generation activations and the generated text
+  code/reasoning_vectors.py          step 2 (CPU): framing / role / interaction vectors at every site
+  code/s3_store.py                   S3 helper, also a CLI to copy a run folder to / from the bucket
+  jobs/submit.sh                     submits step 1, then step 2 (starts only if step 1 succeeds)
+  jobs/extract.sh, jobs/analyze.sh   the two SLURM jobs (also run locally with LOCAL=1)
+  jobs/common.sh                     shared env / paths / S3 settings
+```
+
+## Storage: S3
+
+Runs are stored in `s3://framing-interaction/reasoning_anchors/<model_tag>/` (bucket region us-east-2), with the same
+layout as in "Outputs" below. Explorer only holds a temporary working folder (`/scratch/$USER/reasoning_anchors/<tag>`):
+
+- **extract.sh** uploads each question's activations as soon as it finishes and deletes the local copy, and re-uploads
+  `generations.jsonl` / `.csv` after every question. A resubmit resumes from the `generations.jsonl` in S3.
+- **analyze.sh** downloads everything except the trajectories, streams the trajectories one at a time for the token
+  projections, uploads `analysis/` back to S3, and deletes its working folder.
+
+`S3_URI=s3://other/prefix` writes somewhere else; `S3_URI=` (empty) keeps everything in `outputs/` without S3.
+
+**One-time setup on Explorer:** the env needs boto3 and AWS credentials. Both jobs check this first and stop with an
+error if either is missing.
+
+```bash
+conda activate emotional-safety && pip install boto3
+aws configure          # or put the key in ~/.aws/credentials; region us-east-2
+python -c "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"
 ```
 
 ## Running
 
-Local (CPU, fp32), in the background, from `reasoning_anchors/`:
+On Explorer, from `reasoning_anchors/`:
+
+```bash
+bash jobs/submit.sh --num_reviews 60               # extract (GPU, 8 h) -> analyze (CPU, partition short)
+MODEL=Qwen/Qwen3-1.7B MODEL_TAG=qwen3-1.7B bash jobs/submit.sh --num_reviews 60
+sbatch jobs/analyze.sh                              # rerun only the analysis on what is in S3
+```
+
+- Arguments to `submit.sh` go to the extraction step. If it times out, run `bash jobs/submit.sh` with the same arguments
+  again: questions already in S3 are skipped. The 16-review sample is the first 16 of the 60-review sample (same seed),
+  so going from 16 to 60 only runs the 44 new reviews.
+- Logs: `logs/ra_extract_<jobid>.txt` (progress bar: tokens/s, forced `</think>`, d_after per question) and
+  `logs/ra_analyze_<jobid>.txt`.
+- Any GPU works (bf16 on A100+, fp16 on V100/T4/P100, chosen automatically).
+
+**Copying a run** (works on the Mac with the AWS CLI, or anywhere with `code/s3_store.py`; reruns skip finished files):
+
+```bash
+# existing outputs on Explorer -> S3
+python code/s3_store.py upload outputs/qwen3-0.6B s3://framing-interaction/reasoning_anchors/qwen3-0.6B
+# S3 -> Mac, without the per-token trajectories (several GB)
+aws s3 sync s3://framing-interaction/reasoning_anchors/qwen3-0.6B outputs/qwen3-0.6B --exclude "activations/trajectories/*"
+# one review's trajectories
+aws s3 sync s3://framing-interaction/reasoning_anchors/qwen3-0.6B/activations/trajectories \
+    outputs/qwen3-0.6B/activations/trajectories --exclude "*" --include "CD006827_*"
+```
+
+**Local (Mac, CPU, fp32)**: the same scripts with `LOCAL=1` (env `personaLLM`, which has boto3):
 
 ```bash
 mkdir -p logs
-LOCAL=1 CONDA_ENV=personaLLM nohup bash jobs/run_extract.sh > logs/extract_local.log 2>&1 &
-tail -f logs/extract_local.log        # progress bar: tokens/s, forced </think>, d_after per question
+LOCAL=1 nohup bash jobs/extract.sh --num_reviews 16 > logs/extract_local.log 2>&1 &   # writes to S3
+LOCAL=1 bash jobs/analyze.sh
+LOCAL=1 S3_URI= bash jobs/extract.sh                 # no S3: everything in outputs/<model_tag>/
 ```
 
-Extra arguments go to the extraction step, e.g. `bash jobs/run_extract.sh --num_reviews 8 --max_think_tokens 384`.
-The analysis runs automatically when the extraction finishes. To rerun only the analysis (it uses every review that
-already has all 8 questions, so it also works mid-run):
-
-```bash
-conda activate personaLLM
-python code/reasoning_vectors.py --run_dir outputs/qwen3-0.6B --token_projections
-```
-
-- Env: `personaLLM` (python 3.10, torch 2.2, transformers 4.57; Qwen3 needs >= 4.51). The job script calls the env's
-  own python, because the system `python3` comes first on this machine's PATH.
-- Speed on this MacBook (i5, fp32): about 5 tokens/s for Qwen3-0.6B, so roughly 2–3 min per question at the default
-  budgets and 4–6 h for 16 reviews x 8 questions. If the run stops, rerun the same command: it resumes from
-  `generations/generations.jsonl`.
-- Disk: about 1.5 MB of sites per question, and about 60 KB per generated token for full trajectories at all 28 layers
-  (about 40 MB for a 700-token question, about 5 GB for the default run). `--traj_layers 6 12 18 24 27` or
-  `--no_trajectories` saves less.
-- Cluster: `mkdir -p logs && sbatch jobs/run_extract.sh --num_reviews 60` from `reasoning_anchors/` (mechanistic-search's
-  `patching_config.sh` env, bf16 on GPU).
+About 5 tokens/s on this MacBook (2–3 min per question). Disk per question: about 1.5 MB of sites and about 30–40 MB of
+trajectories (`--traj_layers 6 12 18 24 27` or `--no_trajectories` to save less).
 
 ## Outputs (`outputs/<model_tag>/`)
 

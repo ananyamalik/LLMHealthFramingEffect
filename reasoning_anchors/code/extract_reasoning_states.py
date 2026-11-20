@@ -41,6 +41,9 @@ Outputs (--output_dir, default reasoning_anchors/outputs/<model_tag>/):
                                     (--traj_layers to keep fewer layers; --no_trajectories to keep only sites)
     activations/answer_dir.pt       (W_U[Yes] - W_U[No]) * final-norm gain [d_model] (logit-lens yes/no direction)
     meta.json                       model, layers, d_model, special tokens, yes/no ids, settings
+With --s3_uri, the same layout is written under that S3 prefix: each question's activations are uploaded and deleted
+locally as soon as it finishes, generations.jsonl / .csv are re-uploaded after every question, and a rerun resumes from
+the generations.jsonl in S3.
 
     python code/extract_reasoning_states.py                      # 16 reviews x 8 questions (~4-5 h on a laptop CPU)
     python code/extract_reasoning_states.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --model_tag r1-distill-qwen-1.5B
@@ -325,6 +328,11 @@ def main(args):
 
     global DEVICE
     DEVICE = args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+    if args.dtype == "auto":   # as patching_utils: bf16 needs compute capability 8.0+ (A100 and newer)
+        args.dtype = ("bfloat16" if torch.cuda.get_device_capability(0)[0] >= 8 else "float16") \
+            if DEVICE == "cuda" else "float32"
+    if DEVICE == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}, dtype {args.dtype}")
     model, tokenizer = load_model(args.model, args.dtype, DEVICE)
     num_layers = len(model.model.layers)
     args.traj_layers = args.traj_layers or list(range(num_layers))
@@ -346,6 +354,14 @@ def main(args):
         json.dump(meta, f, indent=1)
 
     rows_path = os.path.join(gen_dir, "generations.jsonl")
+    store = None
+    if args.s3_uri:   # S3 holds the run: resume from its generations.jsonl, upload each question as it finishes
+        from s3_store import S3Store
+        store = S3Store(args.s3_uri)
+        if store.download("generations/generations.jsonl", rows_path):
+            print(f"Downloaded generations.jsonl from {store.uri}")
+        store.upload(os.path.join(out_dir, "meta.json"), "meta.json")
+        store.upload(os.path.join(act_dir, "answer_dir.pt"), "activations/answer_dir.pt")
     done = set()
     if os.path.exists(rows_path):
         with open(rows_path) as f:
@@ -360,12 +376,22 @@ def main(args):
     for example, framing, role in bar:
         claim = get_claims(example)[framing]
         row, sites, traj = run_question(model, tokenizer, example["ReviewID"], framing, role, claim, ctx, args)
-        torch.save(sites, os.path.join(act_dir, "sites", f"{row['key']}.pt"))
+        files = {f"activations/sites/{row['key']}.pt": sites}
         if not args.no_trajectories:
-            torch.save(traj, os.path.join(act_dir, "trajectories", f"{row['key']}.pt"))
+            files[f"activations/trajectories/{row['key']}.pt"] = traj
+        for rel, obj in files.items():
+            torch.save(obj, os.path.join(out_dir, rel))
         with open(rows_path, "a") as f:
             f.write(json.dumps(row) + "\n")
-        write_generations_csv(rows_path, os.path.join(gen_dir, "generations.csv"))
+        csv_path = os.path.join(gen_dir, "generations.csv")
+        write_generations_csv(rows_path, csv_path)
+        if store is not None:
+            # activations first, then the record that marks the question done; local copies are not kept
+            for rel in files:
+                store.upload(os.path.join(out_dir, rel), rel)
+                os.remove(os.path.join(out_dir, rel))
+            store.upload(rows_path, "generations/generations.jsonl")
+            store.upload(csv_path, "generations/generations.csv")
         bar.set_postfix(n_gen=row["n_gen"], tok_s=row["tok_per_s"], forced=row["forced_think_end"],
                         d_after=f"{row['d_after']:+.1f}")
 
@@ -375,7 +401,10 @@ if __name__ == "__main__":
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--model_tag", default="qwen3-0.6B")
     p.add_argument("--input_path", default=DEFAULT_INPUT)
-    p.add_argument("--output_dir", default=None, help="default: reasoning_anchors/outputs/<model_tag>")
+    p.add_argument("--output_dir", default=None, help="default: reasoning_anchors/outputs/<model_tag>; with --s3_uri "
+                   "only a working folder (activations are deleted once uploaded)")
+    p.add_argument("--s3_uri", default=None, help="store the run in S3, e.g. "
+                   "s3://framing-interaction/reasoning_anchors/qwen3-0.6B (resumes from it)")
     p.add_argument("--num_reviews", default=16, type=int, help="seeded sample of reviews (-1: all 368)")
     p.add_argument("--review_ids", nargs="*", default=None, help="run these reviews instead of the sample")
     p.add_argument("--roles", nargs="+", default=ROLES)
@@ -385,7 +414,7 @@ if __name__ == "__main__":
     p.add_argument("--answer_bins", default=4, type=int)
     p.add_argument("--traj_layers", nargs="*", type=int, default=None, help="layers kept in trajectories/ (default all)")
     p.add_argument("--no_trajectories", action="store_true", help="save only the sites, not every token")
-    p.add_argument("--dtype", default="float32", help="float32 on CPU; bfloat16 on a GPU")
+    p.add_argument("--dtype", default="auto", help="auto: bfloat16 on A100+, float16 on older GPUs, float32 on CPU")
     p.add_argument("--device", default="auto", help="auto: cuda if available, else cpu")
     p.add_argument("--threads", default=0, type=int)
     p.add_argument("--seed", default=SEED, type=int)
