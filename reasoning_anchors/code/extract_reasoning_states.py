@@ -327,7 +327,10 @@ def write_generations_csv(jsonl_path: str, csv_path: str) -> None:
 
 def main(args):
     set_global_seed(args.seed)
-    torch.set_num_threads(args.threads or torch.get_num_threads())
+    # Default to the CPUs SLURM gave the job: torch otherwise starts a thread per core of the whole node
+    threads = args.threads or int(os.environ.get("SLURM_CPUS_PER_TASK", 0)) or torch.get_num_threads()
+    torch.set_num_threads(threads)
+    print(f"torch threads: {threads}")
     out_dir = args.output_dir or os.path.join(PROJECT, "outputs", args.model_tag)
     act_dir, gen_dir = os.path.join(out_dir, "activations"), os.path.join(out_dir, "generations")
     for sub in [os.path.join(act_dir, "sites"), os.path.join(act_dir, "trajectories"), gen_dir]:
