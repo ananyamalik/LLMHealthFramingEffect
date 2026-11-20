@@ -41,6 +41,8 @@ Outputs (--output_dir, default reasoning_anchors/outputs/<model_tag>/):
                                     (--traj_layers to keep fewer layers; --no_trajectories to keep only sites)
     activations/answer_dir.pt       (W_U[Yes] - W_U[No]) * final-norm gain [d_model] (logit-lens yes/no direction)
     meta.json                       model, layers, d_model, special tokens, yes/no ids, settings
+With --num_shards n --shard i, the job runs reviews i, i + n, i + 2n, ... of the sample and writes
+generations/generations.shard<i>of<n>.jsonl / .csv; every job skips questions recorded in any generations/*.jsonl.
 With --s3_uri, the same layout is written under that S3 prefix: each question's activations are uploaded and deleted
 locally as soon as it finishes, generations.jsonl / .csv are re-uploaded after every question, and a rerun resumes from
 the generations.jsonl in S3.
@@ -50,6 +52,7 @@ the generations.jsonl in S3.
 """
 import argparse
 import csv
+import glob
 import json
 import os
 import sys
@@ -305,6 +308,14 @@ CSV_FIELDS = ["key", "review_id", "framing", "role", "question", "reasoning", "a
               "forced_think_end", "ended", "d_nothink", "d_after", "seconds", "tok_per_s"]
 
 
+def done_keys(gen_dir: str) -> set[str]:
+    keys = set()
+    for path in glob.glob(os.path.join(gen_dir, "*.jsonl")):
+        with open(path) as f:
+            keys |= {json.loads(line)["key"] for line in f if line.strip()}
+    return keys
+
+
 def write_generations_csv(jsonl_path: str, csv_path: str) -> None:
     with open(jsonl_path) as f:
         rows = [json.loads(line) for line in f if line.strip()]
@@ -353,25 +364,30 @@ def main(args):
     with open(os.path.join(out_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=1)
 
-    rows_path = os.path.join(gen_dir, "generations.jsonl")
+    # Each shard writes its own record file, so parallel jobs never overwrite each other's in S3
+    stem = "generations" if args.num_shards == 1 else f"generations.shard{args.shard}of{args.num_shards}"
+    rows_path = os.path.join(gen_dir, f"{stem}.jsonl")
+    csv_path = os.path.join(gen_dir, f"{stem}.csv")
     store = None
-    if args.s3_uri:   # S3 holds the run: resume from its generations.jsonl, upload each question as it finishes
+    if args.s3_uri:   # S3 holds the run: resume from its record files, upload each question as it finishes
         from s3_store import S3Store
         store = S3Store(args.s3_uri)
-        if store.download("generations/generations.jsonl", rows_path):
-            print(f"Downloaded generations.jsonl from {store.uri}")
+        for rel in store.sizes("generations"):
+            if rel.endswith(".jsonl"):
+                store.download(rel, os.path.join(out_dir, rel))
+                print(f"Downloaded {rel} from {store.uri}")
         store.upload(os.path.join(out_dir, "meta.json"), "meta.json")
         store.upload(os.path.join(act_dir, "answer_dir.pt"), "activations/answer_dir.pt")
-    done = set()
-    if os.path.exists(rows_path):
-        with open(rows_path) as f:
-            done = {json.loads(line)["key"] for line in f if line.strip()}
-        print(f"Resuming: {len(done)} questions already in {rows_path}")
+    done = done_keys(gen_dir)   # every record file (all shards, earlier runs), not only this shard's
+    if done:
+        print(f"Resuming: {len(done)} questions already in {gen_dir}")
 
-    todo = [(e, f, r) for e in dataset for f in FRAMINGS for r in [NO_ROLE] + args.roles
+    # Shard by position in the full sample, so the split does not depend on what is already done
+    shard_reviews = [e for k, e in enumerate(dataset) if k % args.num_shards == args.shard]
+    todo = [(e, f, r) for e in shard_reviews for f in FRAMINGS for r in [NO_ROLE] + args.roles
             if f"{e['ReviewID']}_{f}_{r}" not in done]
-    print(f"{model.config.num_hidden_layers} layers, d_model {model.config.hidden_size}; "
-          f"{len(dataset)} reviews, {len(todo)} questions to run")
+    print(f"{model.config.num_hidden_layers} layers, d_model {model.config.hidden_size}; {len(dataset)} reviews, "
+          f"shard {args.shard}/{args.num_shards}: {len(shard_reviews)} reviews, {len(todo)} questions to run")
     bar = tqdm(todo, desc="questions")
     for example, framing, role in bar:
         claim = get_claims(example)[framing]
@@ -383,15 +399,14 @@ def main(args):
             torch.save(obj, os.path.join(out_dir, rel))
         with open(rows_path, "a") as f:
             f.write(json.dumps(row) + "\n")
-        csv_path = os.path.join(gen_dir, "generations.csv")
         write_generations_csv(rows_path, csv_path)
         if store is not None:
             # activations first, then the record that marks the question done; local copies are not kept
             for rel in files:
                 store.upload(os.path.join(out_dir, rel), rel)
                 os.remove(os.path.join(out_dir, rel))
-            store.upload(rows_path, "generations/generations.jsonl")
-            store.upload(csv_path, "generations/generations.csv")
+            store.upload(rows_path, f"generations/{stem}.jsonl")
+            store.upload(csv_path, f"generations/{stem}.csv")
         bar.set_postfix(n_gen=row["n_gen"], tok_s=row["tok_per_s"], forced=row["forced_think_end"],
                         d_after=f"{row['d_after']:+.1f}")
 
@@ -407,6 +422,8 @@ if __name__ == "__main__":
                    "s3://framing-interaction/reasoning_anchors/qwen3-0.6B (resumes from it)")
     p.add_argument("--num_reviews", default=16, type=int, help="seeded sample of reviews (-1: all 368)")
     p.add_argument("--review_ids", nargs="*", default=None, help="run these reviews instead of the sample")
+    p.add_argument("--shard", default=0, type=int, help="this job's share of the reviews (0 .. num_shards - 1)")
+    p.add_argument("--num_shards", default=1, type=int, help="parallel jobs splitting the reviews")
     p.add_argument("--roles", nargs="+", default=ROLES)
     p.add_argument("--max_think_tokens", default=512, type=int, help="reasoning budget before </think> is forced")
     p.add_argument("--max_answer_tokens", default=192, type=int)

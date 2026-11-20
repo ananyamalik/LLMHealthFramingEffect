@@ -93,8 +93,14 @@ def auc(score: np.ndarray, label: np.ndarray) -> float:
 def load_run(run_dir: str):
     with open(os.path.join(run_dir, "meta.json")) as f:
         meta = json.load(f)
-    with open(os.path.join(run_dir, "generations", "generations.jsonl")) as f:
-        rows = [json.loads(line) for line in f if line.strip()]
+    rows = {}   # every record file (generations.jsonl and the shards' generations.shard*.jsonl), one row per key
+    for path in sorted(glob.glob(os.path.join(run_dir, "generations", "*.jsonl"))):
+        with open(path) as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    rows[row["key"]] = row
+    rows = list(rows.values())
     answer_dir = torch.load(os.path.join(run_dir, "activations", "answer_dir.pt")).float()
     return meta, rows, answer_dir
 
